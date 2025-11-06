@@ -1,0 +1,120 @@
+/***********************************
+  1) ADMIN & CUSTOMER BASE TABLES
+***********************************/
+UPDATE admin_user
+SET email = REPLACE(email, '@', '123@321');
+
+UPDATE customer_entity
+SET email = REPLACE(email, '@', '123@321');
+
+
+/***********************************
+  2) CUSTOMER GRID (Frontend Visible)
+***********************************/
+UPDATE customer_grid_flat
+SET email = REPLACE(email, '@', '123@321');
+
+UPDATE customer_grid_flat
+SET merchant_phonenumber = '9900682933'
+WHERE merchant_phonenumber IS NOT NULL
+  AND merchant_phonenumber <> '';
+
+UPDATE customer_grid_flat
+SET contact_phonenumber = '9900682933'
+WHERE contact_phonenumber IS NOT NULL
+  AND contact_phonenumber <> '';
+
+
+/***********************************
+  3) EMAIL CONTACT & INTEGRATION
+***********************************/
+UPDATE email_contact
+SET email = REPLACE(email, '@', '123@321');
+
+UPDATE integration
+SET email = REPLACE(email, '@', '123@321');
+
+
+/***********************************
+  4) MERCHANT / DEALERS INFO TABLE
+***********************************/
+UPDATE trish_manage_dealers
+SET email_id = REPLACE(email_id, '@', '123@321');
+
+UPDATE trish_manage_dealers
+SET alternate_email = REPLACE(alternate_email, '@', '123@321');
+
+UPDATE trish_manage_dealers
+SET mobile_no = '9900682933'
+WHERE mobile_no IS NOT NULL
+  AND mobile_no <> '';
+
+UPDATE trish_manage_dealers
+SET alternate_mobile_no = '9900682933'
+WHERE alternate_mobile_no IS NOT NULL
+  AND alternate_mobile_no <> '';
+
+
+/***********************************
+  5) QUOTE TABLE (Checkout Email)
+***********************************/
+UPDATE quote
+SET customer_email = REPLACE(customer_email, '@', '123@321');
+
+
+/***********************************
+  6) CUSTOMER ENTITY VARCHARS (Attributes)
+***********************************/
+
+-- Replace all phone numbers with test number
+UPDATE customer_entity_varchar
+SET value = '9900682933'
+WHERE attribute_id IN (221, 222, 223)
+  AND value IS NOT NULL
+  AND value <> '';
+
+-- Merchant POC Name → XYZ
+UPDATE customer_entity_varchar
+SET value = 'XYZ'
+WHERE attribute_id = 251
+  AND value IS NOT NULL
+  AND value <> '';
+
+-- SBI POC Name → XYZ
+UPDATE customer_entity_varchar
+SET value = 'XYZ'
+WHERE attribute_id = 253
+  AND value IS NOT NULL
+  AND value <> '';
+
+-- Notification Email → Replace @
+UPDATE customer_entity_varchar
+SET value = REPLACE(value, '@', '123@321')
+WHERE attribute_id = 264
+  AND value IS NOT NULL
+  AND value <> '';
+
+-- Building No → 123456
+UPDATE customer_entity_varchar
+SET value = '123456'
+WHERE attribute_id = 271
+  AND value IS NOT NULL
+  AND value <> '';
+
+-- Pincode → 123456
+UPDATE customer_entity_varchar
+SET value = '123456'
+WHERE attribute_id = 272
+  AND value IS NOT NULL
+  AND value <> '';
+
+-- Legal Name → XYZ
+UPDATE customer_entity_varchar
+SET value = 'XYZ'
+WHERE attribute_id = 273
+  AND value IS NOT NULL
+  AND value <> '';
+ 
+DELETE FROM customer_log;
+DELETE FROM magento_logging_event;
+DELETE FROM magento_logging_event_changes;
