@@ -1,0 +1,83 @@
+Magento Circular Dependency Fix for Lotus\Kibanablogs\Model\Logger
+=====================================================================
+
+Issue:
+------
+You are facing a circular dependency error during 'php bin/magento setup:upgrade':
+
+Lotus\Kibanablogs\Model\Logger depends on Magento\Framework\App\Context, 
+and vice versa.
+
+Cause:
+------
+The custom logger class is injecting Magento framework context objects (like 
+Magento\Framework\App\Context or ObjectManager), which leads to a dependency loop.
+
+Fix Steps:
+-----------
+
+1. Open file:
+   app/code/Lotus/Kibanablogs/Model/Logger.php
+
+2. Replace the file content with the following fixed version:
+
+----------------------------------------------------------
+<?php
+namespace Lotus\Kibanablogs\Model;
+
+use Monolog\Logger as MonologLogger;
+use Monolog\Level;
+use Monolog\DateTimeImmutable as MonologDateTimeImmutable;
+
+class Logger extends MonologLogger
+{
+    // No constructor injection of Context or ObjectManager
+
+    public function addRecord(Level|int $level, string $message, array $context = [], ?MonologDateTimeImmutable $datetime = null): bool
+    {
+        return parent::addRecord($level, $message, $context, $datetime);
+    }
+}
+----------------------------------------------------------
+
+3. Check your DI configuration file:
+   app/code/Lotus/Kibanablogs/etc/di.xml
+
+   Remove any argument that injects Magento\Framework\App\Context or ObjectManager:
+   ----------------------------------------------------------
+   <type name="Lotus\Kibanablogs\Model\Logger">
+       <arguments>
+           <!-- REMOVE this if present -->
+           <argument name="context" xsi:type="object">Magento\Framework\App\Context</argument>
+       </arguments>
+   </type>
+   ----------------------------------------------------------
+
+4. Clear cache and regenerate dependency injection:
+   ----------------------------------------------------------
+   bin/magento cache:flush
+   bin/magento setup:di:compile
+   bin/magento setup:upgrade
+   ----------------------------------------------------------
+
+Optional Deprecation Fixes (PHP 8.x Warnings)
+---------------------------------------------
+For the deprecation warnings in Lotus\Offer\Model\ResourceModel\Productgrid\Grid\Collection.php,
+update your methods to use explicit nullable types:
+
+Example changes:
+----------------------------------------------------------
+// OLD
+public function setSearchCriteria(SearchCriteriaInterface $searchCriteria = null)
+
+// NEW
+public function setSearchCriteria(?SearchCriteriaInterface $searchCriteria = null)
+
+// OLD
+public function setItems(array $items = null)
+
+// NEW
+public function setItems(?array $items = null)
+----------------------------------------------------------
+
+Once these fixes are done, rerun setup upgrade. It should complete successfully.
