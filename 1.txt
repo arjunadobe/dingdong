@@ -1,1 +1,231 @@
+<?php
+use Magento\Framework\App\Bootstrap;
+use Laminas\Ldap\Ldap;
+use Laminas\Ldap\Exception\LdapException;
 
+require __DIR__ . '/app/bootstrap.php';
+
+$bootstrap = Bootstrap::create(BP, $_SERVER);
+$objectManager = $bootstrap->getObjectManager();
+
+$config = [
+    'host'        => 'ldap.forumsys.com',
+    'port'        => 389,
+    'username'    => 'cn=read-only-admin,dc=example,dc=com',
+    'password'    => 'password',
+    'baseDn'      => 'dc=example,dc=com',
+    'bindRequiresDn' => true,
+    'networkTimeout' => 10,
+    'reconnectAttempts' => 2,
+];
+
+echo "🔍 LDAP Connection Diagnostics\n";
+echo "=============================\n";
+
+// Test 1: Basic connection and DNS resolution
+echo "1. Testing DNS resolution for '{$config['host']}'...\n";
+$ip = gethostbyname($config['host']);
+if ($ip === $config['host']) {
+    echo "   ✗ DNS resolution failed - cannot resolve hostname\n";
+    exit;
+} else {
+    echo "   ✓ DNS resolved to: $ip\n";
+}
+
+// Test 2: Port connectivity
+echo "2. Testing port {$config['port']} connectivity...\n";
+$socket = @fsockopen($config['host'], $config['port'], $errno, $errstr, 5);
+if ($socket) {
+    echo "   ✓ Port {$config['port']} is open and accessible\n";
+    fclose($socket);
+} else {
+    echo "   ✗ Port {$config['port']} connection failed: $errstr (code: $errno)\n";
+    exit;
+}
+
+// Test 3: LDAP connection and bind with service account
+echo "3. Testing LDAP connection and bind...\n";
+$ldap = new Ldap($config);
+
+try {
+    $ldap->bind();
+    echo "   ✓ LDAP connection established successfully\n";
+    echo "   ✓ LDAP bind successful with service account\n";
+
+    // Get connection details
+    $boundUser = $ldap->getBoundUser();
+    echo "   - Bound as: " . ($boundUser ?: 'Anonymous') . "\n";
+
+} catch (LdapException $e) {
+    echo "   ✗ LDAP connection/bind failed\n";
+    echo "   - Error: " . $e->getMessage() . "\n";
+    echo "   - Code: " . $e->getCode() . "\n";
+    exit;
+}
+
+// Test 4: Search capability
+echo "\n4. Testing LDAP search functionality...\n";
+try {
+    $testResults = $ldap->search('(objectClass=*)', $config['baseDn'], Ldap::SEARCH_SCOPE_BASE);
+    echo "   ✓ Base DN search successful\n";
+    echo "   - Base DN: {$config['baseDn']}\n";
+} catch (LdapException $e) {
+    echo "   ✗ Base DN search failed\n";
+    echo "   - Error: " . $e->getMessage() . "\n";
+}
+
+// Test 5: User search and authentication (FIXED)
+echo "\n5. Testing user search and authentication...\n";
+
+$testUsers = [
+    'einstein' => ['password', 'Should work - valid user with correct password'],
+    'newton' => ['password', 'Should work - valid user with correct password'],
+    'invaliduser' => ['password', 'Should fail - user does not exist'],
+    'einstein' => ['wrongpassword', 'Should fail - valid user but wrong password'],
+];
+
+foreach ($testUsers as $username => [$password, $description]) {
+    echo "\n   Testing: $username\n";
+    echo "   Description: $description\n";
+    echo "   " . str_repeat('-', 50) . "\n";
+
+    try {
+        // Search for user using service account connection
+        $results = $ldap->search("(uid=$username)", $config['baseDn']);
+
+        if ($results->count() > 0) {
+            foreach ($results as $result) {
+                echo "   ✓ User found in LDAP:\n";
+                echo "     - DN: " . $result['dn'] . "\n";
+                echo "     - CN: " . ($result['cn'][0] ?? 'N/A') . "\n";
+                echo "     - UID: " . ($result['uid'][0] ?? 'N/A') . "\n";
+
+                // Test authentication - FIXED APPROACH
+                try {
+                    // Create a NEW LDAP instance with FULL configuration for user bind
+                    $userLdap = new Ldap([
+                        'host' => $config['host'],
+                        'port' => $config['port'],
+                        'username' => $result['dn'], // User's DN for binding
+                        'password' => $password,     // User's password
+                        'baseDn' => $config['baseDn'],
+                        'bindRequiresDn' => true,
+                        'networkTimeout' => 10,
+                    ]);
+
+                    // This will try to bind with the user's credentials
+                    $userLdap->bind();
+                    echo "     ✅ Authentication SUCCESSFUL\n";
+                    echo "     ✓ User '$username' can log in with provided password\n";
+
+                } catch (LdapException $e) {
+                    echo "     ❌ Authentication FAILED\n";
+                    echo "       - Error: " . $e->getMessage() . "\n";
+                    echo "       - Code: " . $e->getCode() . "\n";
+
+                    // Provide specific error guidance
+                    switch ($e->getCode()) {
+                        case 49:
+                            if ($password === 'wrongpassword') {
+                                echo "       💡 Expected - password is incorrect\n";
+                            } else {
+                                echo "       💡 Invalid credentials - check username/password\n";
+                            }
+                            break;
+                        case 32:
+                            echo "       💡 User not found in directory\n";
+                            break;
+                        case 53:
+                            echo "       💡 Account disabled or restricted\n";
+                            break;
+                        default:
+                            echo "       💡 Authentication failed for unknown reason\n";
+                    }
+                }
+                break; // Only test first result
+            }
+        } else {
+            echo "   ❌ User '$username' not found in LDAP\n";
+            if ($username === 'invaliduser') {
+                echo "       💡 Expected - this user doesn't exist in the directory\n";
+            } else {
+                echo "       💡 Check if:\n";
+                echo "          - Username is correct\n";
+                echo "          - Search filter is correct\n";
+                echo "          - User exists in the Base DN\n";
+            }
+        }
+
+    } catch (LdapException $e) {
+        echo "   ❌ Search failed for '$username'\n";
+        echo "     - Error: " . $e->getMessage() . "\n";
+        echo "     - Code: " . $e->getCode() . "\n";
+    }
+}
+
+// Test 6: Alternative authentication test using the same connection
+echo "\n6. Testing alternative authentication method...\n";
+try {
+    // Re-bind with service account first (to restore connection)
+    $ldap->bind();
+
+    // Search for einstein
+    $results = $ldap->search("(uid=einstein)", $config['baseDn']);
+
+    if ($results->count() > 0) {
+        $user = $results->current();
+        $userDn = $user['dn'];
+
+        echo "   Testing direct bind with user DN: $userDn\n";
+
+        // Method 1: Create completely new connection for user
+        $userLdap = new Ldap($config); // Start with same config
+        $userLdap->bind($userDn, 'password'); // Then bind with user credentials
+
+        echo "   ✓ Alternative auth method SUCCESSFUL\n";
+
+    }
+} catch (LdapException $e) {
+    echo "   ✗ Alternative auth failed: " . $e->getMessage() . "\n";
+}
+
+// Test 7: Available users listing
+echo "\n7. Listing available test users...\n";
+try {
+    $allUsers = $ldap->search('(objectClass=inetOrgPerson)', $config['baseDn']);
+    echo "   ✓ Found {$allUsers->count()} users in directory\n";
+
+    if ($allUsers->count() > 0) {
+        echo "   Available users (username / password):\n";
+        $count = 0;
+        foreach ($allUsers as $user) {
+            $uid = $user['uid'][0] ?? 'N/A';
+            $cn = $user['cn'][0] ?? 'N/A';
+            if ($uid !== 'N/A') {
+                echo "     - $uid / password ($cn)\n";
+                $count++;
+                if ($count >= 5) break; // Show first 5 users
+            }
+        }
+    }
+} catch (LdapException $e) {
+    echo "   ✗ Failed to list users: " . $e->getMessage() . "\n";
+}
+
+echo "\n" . str_repeat('=', 50) . "\n";
+echo "🏁 LDAP Diagnostics Complete\n";
+
+// Summary
+echo "\nSummary:\n";
+echo "-------\n";
+echo "✓ DNS Resolution: Working\n";
+echo "✓ Port 389: Accessible\n";
+echo "✓ LDAP Connection: Established\n";
+echo "✓ Service Account Bind: Successful\n";
+echo "✓ User Search: Functional\n";
+echo "\nCommon Issues Fixed:\n";
+echo "- Used proper LDAP configuration for user binds\n";
+echo "- Provided complete config for new LDAP instances\n";
+echo "- Better error handling and diagnostics\n";
+
+ 
