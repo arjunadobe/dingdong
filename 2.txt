@@ -1,1 +1,128 @@
+<?php
+use Magento\Framework\App\Bootstrap;
+use Laminas\Ldap\Ldap;
+use Laminas\Ldap\Exception\LdapException;
+
+require __DIR__ . '/app/bootstrap.php';
+
+$bootstrap = Bootstrap::create(BP, $_SERVER);
+$objectManager = $bootstrap->getObjectManager();
+
+echo "\n============================================\n";
+echo "   SBI LDAP DIAGNOSTIC (Check User Exists)\n";
+echo "============================================\n\n";
+
+$config = [
+    'host'              => 'ha-ldap',
+    'port'              => 636, // LDAPS
+    'useSsl'            => true,
+    'useStartTls'       => false,
+    'bindRequiresDn'    => true,
+
+    'baseDn' => 'OU=Users,OU=LOTUS,OU=Others Location,DC=CORP,DC=AD,DC=SBI',
+
+    'username' => 'CN=digi_yono_mgmt_prod,OU=Users,OU=LOTUS,OU=Others Location,DC=CORP,DC=AD,DC=SBI',
+    'password' => 'Busi#342mgt',
+
+    'networkTimeout'    => 10,
+    'reconnectAttempts' => 2,
+];
+
+// ---------------------------------------------------------------
+// Test 1: Host resolution
+// ---------------------------------------------------------------
+
+echo "1. Checking host resolution...\n";
+$resolvedIp = gethostbyname($config['host']);
+echo "   Host: {$config['host']} → $resolvedIp\n";
+
+if ($resolvedIp === $config['host']) {
+    echo "   ✗ Could NOT resolve hostname. Check /etc/hosts.\n";
+    exit;
+}
+echo "   ✓ Host resolved.\n\n";
+
+// ---------------------------------------------------------------
+// Test 2: Port test
+// ---------------------------------------------------------------
+
+echo "2. Testing LDAPS port (636)...\n";
+$socket = @fsockopen($config['host'], $config['port'], $errno, $errStr, 5);
+
+if (!$socket) {
+    echo "   ✗ Cannot connect: $errStr ($errno)\n";
+    exit;
+}
+fclose($socket);
+echo "   ✓ Port open.\n\n";
+
+// ---------------------------------------------------------------
+// Test 3: Bind using service account
+// ---------------------------------------------------------------
+
+echo "3. Testing LDAP Bind...\n";
+$ldap = new Ldap($config);
+
+try {
+    $ldap->bind();
+    echo "Bind successful.\n\n";
+} catch (LdapException $e) {
+    echo "Bind FAILED: {$e->getMessage()}\n";
+    exit;
+}
+
+// ---------------------------------------------------------------
+// Test 4: Base DN validation
+// ---------------------------------------------------------------
+
+echo "4. Checking Base DN...\n";
+try {
+    $ldap->search('(objectClass=*)', $config['baseDn'], Ldap::SEARCH_SCOPE_BASE);
+    echo "   ✓ Base DN valid: {$config['baseDn']}\n\n";
+} catch (LdapException $e) {
+    echo "   ✗ Base DN invalid: {$e->getMessage()}\n";
+}
+
+// ---------------------------------------------------------------
+// Test 5: Check whether user exists
+// ---------------------------------------------------------------
+
+echo "5. Checking User Exists (no password)…\n";
+
+$testUsers = [
+    'testuser1',
+    'testuser2',
+    'pranav',
+    'arjun',
+];
+
+foreach ($testUsers as $sam) {
+
+    echo "\n-----------------------------------------\n";
+    echo "Searching for user: $sam\n";
+
+    try {
+        $results = $ldap->search("(samaccountname=$sam)", $config['baseDn']);
+
+        if ($results->count() === 0) {
+            echo "   User NOT found: $sam\n";
+            continue;
+        }
+
+        $entry = $results->current();
+        $userDn = $entry['dn'];
+
+        echo "   ✓ FOUND user in LDAP\n";
+        echo "     - DN: $userDn\n";
+        echo "     - CN: " . ($entry['cn'][0] ?? 'N/A') . "\n";
+        echo "     - Mail: " . ($entry['mail'][0] ?? 'N/A') . "\n";
+
+    } catch (LdapException $e) {
+        echo "   Search error: {$e->getMessage()}\n";
+    }
+}
+
+echo "\n============================================\n";
+echo "     SBI USER-EXIST CHECK COMPLETE\n";
+echo "============================================\n";
 
