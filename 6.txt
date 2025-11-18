@@ -13,7 +13,6 @@ etc/di.xml
 namespace Lotus\Merchant\Plugin;
 
 use Magento\Eav\Model\Attribute\Data\Select as Subject;
-use Magento\Framework\Exception\LocalizedException;
 
 class SelectValidatePlugin
 {
@@ -22,17 +21,27 @@ class SelectValidatePlugin
      *
      * @param Subject $subject
      * @param mixed $value
-     * @return array|null
-     * @throws LocalizedException
+     * @return array
      */
-    public function beforeValidateValue(Subject $subject, $value): ?array
+    public function beforeValidateValue(Subject $subject, $value): array
     {
         $attribute = $subject->getAttribute();
 
-        if (!$attribute || $attribute->getAttributeCode() !== 'address_proof') {
+        if (!$attribute) {
             return [$value];
         }
 
+        // Attributes to skip the "option does not exist" validation
+        $skipAttributes = [
+            'address_proof',
+            'merchant_categories'
+        ];
+
+        if (!in_array($attribute->getAttributeCode(), $skipAttributes, true)) {
+            return [$value];
+        }
+
+        // If value is invalid or removed from source → make it empty
         if (!empty($value)) {
             $source = $attribute->getSource();
             if ($source && !$source->getOptionText($value)) {
@@ -43,4 +52,3 @@ class SelectValidatePlugin
         return [$value];
     }
 }
-
