@@ -1,7 +1,1 @@
-<arguments>
-            <argument name="helper" xsi:type="object">Lotus\Kibanalogs\Helper\Data\Proxy</argument>
-        </arguments>
 
-      <arguments>
-            <argument name="context" xsi:type="object">Magento\Framework\App\Helper\Context\Proxy</argument>
-        </arguments>
