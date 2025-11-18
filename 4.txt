@@ -1,0 +1,255 @@
+<?php
+use Magento\Framework\App\Bootstrap;
+
+require __DIR__ . '/app/bootstrap.php';
+
+$bootstrap = Bootstrap::create(BP, $_SERVER);
+$objectManager = $bootstrap->getObjectManager();
+
+echo "\n=============================================================\n";
+echo "         SBI LDAP DIAGNOSTIC TOOL (MULTIPLE SERVER TEST)\n";
+echo "=============================================================\n\n";
+
+// ============================================================
+// SBI LDAP SERVERS LIST (from screenshot)
+// ============================================================
+
+$ldapServers = [
+    "ha-ldap",
+    "10.176.54.32",
+    "10.189.37.138",
+    "10.176.54.31",
+    "10.189.37.137",
+    "10.176.54.30",
+    "10.189.37.136",
+    "10.176.53.145",
+    "10.189.37.135"
+];
+
+// ============================================================
+// Credentials + Base DN
+// ============================================================
+
+$password = "Busi#342mgt";
+
+$baseDn = "OU=Users,OU=LOTUS,OU=Others Location,DC=CORP,DC=AD,DC=SBI";
+
+$possibleUsernames = [
+    'CN=digi_yono_mgmt_prod,OU=Users,OU=LOTUS,OU=Others Location,DC=CORP,DC=AD,DC=SBI',
+    'CN=digi_yono_mgmt_prod,OU=Users,OU=LOTUS,OU=Others\ Location,DC=CORP,DC=AD,DC=SBI',
+    'digi_yono_mgmt_prod@CORP.AD.SBI',
+    'CORP\\digi_yono_mgmt_prod'
+];
+
+// ============================================================
+// Try each server
+// ============================================================
+
+$workingServer = null;
+$workingUsername = null;
+$ldapConn = null;
+
+echo "1. Testing all LDAP servers...\n\n";
+
+foreach ($ldapServers as $server) {
+
+    echo "-----------------------------------\n";
+    echo "Testing server: $server\n";
+
+    // Test port connectivity
+    $socket = @fsockopen($server, 389, $errno, $errStr, 5);
+    if (!$socket) {
+        echo "   ✗ Cannot connect to port 389 on $server - $errStr\n";
+        continue;
+    }
+    fclose($socket);
+
+    echo "   ✓ Port 389 reachable\n";
+
+    // Now test bind with multiple username formats
+    foreach ($possibleUsernames as $u) {
+
+        echo "   Trying bind with username: $u\n";
+
+        // Connect to LDAP server
+        $ldapConn = ldap_connect($server, 389);
+
+        if (!$ldapConn) {
+            echo "   ✗ LDAP connection failed\n";
+            continue;
+        }
+
+        // Set LDAP options
+        ldap_set_option($ldapConn, LDAP_OPT_PROTOCOL_VERSION, 3);
+        ldap_set_option($ldapConn, LDAP_OPT_REFERRALS, 0);
+        ldap_set_option($ldapConn, LDAP_OPT_NETWORK_TIMEOUT, 10);
+
+        try {
+            // Attempt bind
+            $bindResult = @ldap_bind($ldapConn, $u, $password);
+
+            if ($bindResult) {
+                // SUCCESS!
+                echo "   ✓ BIND SUCCESSFUL on server: $server\n";
+                $workingServer = $server;
+                $workingUsername = $u;
+                break 2; // Break out of both loops
+            } else {
+                $error = ldap_error($ldapConn);
+                $errno = ldap_errno($ldapConn);
+                echo "   ✗ Bind Failed: $error (Code: $errno)\n";
+            }
+
+        } catch (Exception $e) {
+            echo "   ✗ Bind Exception: " . $e->getMessage() . "\n";
+        }
+
+        // Close connection if bind failed
+        if (!$bindResult) {
+            ldap_close($ldapConn);
+            $ldapConn = null;
+        }
+    }
+}
+
+if (!$workingServer) {
+    echo "\n❌ ERROR: No LDAP server allowed a successful bind.\n";
+    exit;
+}
+
+echo "\n✔ Working LDAP Server: $workingServer\n";
+echo "✔ Working Bind Username: $workingUsername\n\n";
+
+// ============================================================
+// 2. Validate Base DN
+// ============================================================
+
+echo "2. Validating Base DN...\n";
+
+if ($ldapConn) {
+    $searchResult = @ldap_read($ldapConn, $baseDn, "(objectClass=*)", [], 0, 0, 10);
+
+    if ($searchResult && ldap_count_entries($ldapConn, $searchResult) > 0) {
+        echo "   ✓ Base DN valid\n";
+        ldap_free_result($searchResult);
+    } else {
+        $error = ldap_error($ldapConn);
+        echo "   ✗ Base DN error: $error\n";
+    }
+} else {
+    echo "   ✗ No active LDAP connection\n";
+}
+
+echo "\n";
+
+// ============================================================
+// 3. Check User Existence
+// ============================================================
+
+echo "3. Checking if user exists...\n";
+
+$checkUsers = ['arjun', 'pranav', 'testuser'];
+
+foreach ($checkUsers as $sam) {
+
+    echo "\nSearching for user: $sam\n";
+
+    if (!$ldapConn) {
+        echo "   ✗ No active LDAP connection\n";
+        continue;
+    }
+
+    $filter = "(samaccountname=$sam)";
+    $searchResult = @ldap_search($ldapConn, $baseDn, $filter, [], 0, 0, 10);
+
+    if (!$searchResult) {
+        $error = ldap_error($ldapConn);
+        echo "   ✗ LDAP Search Error: $error\n";
+        continue;
+    }
+
+    $entries = ldap_get_entries($ldapConn, $searchResult);
+
+    if ($entries['count'] == 0) {
+        echo "   ❌ User NOT found: $sam\n";
+    } else {
+        echo "   ✓ User FOUND:\n";
+        $entry = $entries[0];
+        echo "     DN: " . ($entry['dn'] ?? 'N/A') . "\n";
+        echo "     CN: " . ($entry['cn'][0] ?? 'N/A') . "\n";
+        echo "     Mail: " . ($entry['mail'][0] ?? 'N/A') . "\n";
+        echo "     SAM Account Name: " . ($entry['samaccountname'][0] ?? 'N/A') . "\n";
+
+        // Display all available attributes for debugging
+        echo "     Available attributes: ";
+        $attrs = [];
+        foreach ($entry as $key => $value) {
+            if (!is_numeric($key) && $key !== 'count') {
+                $attrs[] = $key;
+            }
+        }
+        echo implode(', ', $attrs) . "\n";
+    }
+
+    ldap_free_result($searchResult);
+}
+
+// ============================================================
+// 4. Test User Authentication
+// ============================================================
+
+echo "\n4. Testing user authentication...\n";
+
+$testUsers = [
+    ['username' => 'arjun', 'password' => 'test123'],
+    ['username' => 'pranav', 'password' => 'test123'],
+];
+
+foreach ($testUsers as $userTest) {
+    $username = $userTest['username'];
+    $userPassword = $userTest['password'];
+
+    echo "\nTesting authentication for: $username\n";
+
+    // First find user DN
+    $filter = "(samaccountname=$username)";
+    $searchResult = @ldap_search($ldapConn, $baseDn, $filter);
+
+    if ($searchResult) {
+        $entries = ldap_get_entries($ldapConn, $searchResult);
+
+        if ($entries['count'] > 0) {
+            $userDn = $entries[0]['dn'];
+            echo "   Found user DN: $userDn\n";
+
+            // Try to bind with user credentials
+            $userLdapConn = ldap_connect($workingServer, 389);
+            ldap_set_option($userLdapConn, LDAP_OPT_PROTOCOL_VERSION, 3);
+            ldap_set_option($userLdapConn, LDAP_OPT_REFERRALS, 0);
+
+            $userBind = @ldap_bind($userLdapConn, $userDn, $userPassword);
+
+            if ($userBind) {
+                echo "   ✅ Authentication SUCCESSFUL for: $username\n";
+            } else {
+                echo "   ❌ Authentication FAILED for: $username\n";
+                echo "   Error: " . ldap_error($userLdapConn) . "\n";
+            }
+
+            ldap_close($userLdapConn);
+        } else {
+            echo "   ❌ User not found: $username\n";
+        }
+
+        ldap_free_result($searchResult);
+    }
+}
+
+// Clean up
+if ($ldapConn) {
+    ldap_close($ldapConn);
+}
+
+echo "\n=============================================================\n";
+echo "                  LDAP TEST COMPLETED\n";
+echo "=============================================================\n";
