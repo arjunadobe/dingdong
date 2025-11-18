@@ -1,74 +1,33 @@
-etc/di.xml
-
-<?xml version="1.0" encoding="UTF-8" ?>
-<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
-    <type name="Magento\Eav\Model\Attribute\Data\Select">
-        <plugin name="Lotus\Merchant\Plugin\SelectValidatePlugin"
-                type="Lotus\Merchant\Plugin\SelectValidatePlugin" />
+    <type name="Magento\Eav\Model\Attribute\Data\MultiSelect">
+        <plugin name="Lotus\Merchant\Plugin\MultiSelectValidatePlugin"
+                type="Lotus\Merchant\Plugin\MultiSelectValidatePlugin" />
     </type>
-</config>
 
 <?php
 
 namespace Lotus\Merchant\Plugin;
 
-use Magento\Eav\Model\Attribute\Data\Select as Subject;
+use Magento\Eav\Model\Attribute\Data\Multiselect as Subject;
 
-class SelectValidatePlugin
-{
-    /**
-     * BEFORE plugin — called before validateValue() is executed.
-     *
-     * @param Subject $subject
-     * @param mixed $value
-     * @return array
-     */
-    public function beforeValidateValue(Subject $subject, $value): array
-    {
-        $attribute = $subject->getAttribute();
-
-        if (!$attribute) {
-            return [$value];
-        }
-
-        // Attributes to skip the "option does not exist" validation
-        $skipAttributes = [
-            'address_proof',
-            'merchant_categories'
-        ];
-
-        if (!in_array($attribute->getAttributeCode(), $skipAttributes, true)) {
-            return [$value];
-        }
-
-        // If value is invalid or removed from source → make it empty
-        if (!empty($value)) {
-            $source = $attribute->getSource();
-            if ($source && !$source->getOptionText($value)) {
-                $value = '';
-            }
-        }
-
-        return [$value];
-    }
-
+class MultiSelectValidatePlugin {
 
     /**
-     * AFTER plugin — force validation result to true for merchant_categories.
+     * AFTER plugin — always return true for merchant_secondary_categories
      *
      * @param Subject $subject
-     * @param mixed $result
-     * @param mixed $value
+     * @param mixed   $result
+     * @param mixed   $value
      * @return mixed
      */
     public function afterValidateValue(Subject $subject, $result, $value)
     {
         $attribute = $subject->getAttribute();
 
-        if ($attribute && $attribute->getAttributeCode() === 'merchant_categories') {
-            return true; // ALWAYS PASS
+        if ($attribute && $attribute->getAttributeCode() === 'merchant_secondary_categories') {
+            return true;
         }
 
-        return $result; // Others behave normally
+        return $result;
     }
+
 }
