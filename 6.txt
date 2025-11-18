@@ -1,0 +1,46 @@
+etc/di.xml
+
+<?xml version="1.0" encoding="UTF-8" ?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+    <type name="Magento\Eav\Model\Attribute\Data\Select">
+        <plugin name="Lotus\Merchant\Plugin\SelectValidatePlugin"
+                type="Lotus\Merchant\Plugin\SelectValidatePlugin" />
+    </type>
+</config>
+
+<?php
+
+namespace Lotus\Merchant\Plugin;
+
+use Magento\Eav\Model\Attribute\Data\Select as Subject;
+use Magento\Framework\Exception\LocalizedException;
+
+class SelectValidatePlugin
+{
+    /**
+     * BEFORE plugin — called before validateValue() is executed.
+     *
+     * @param Subject $subject
+     * @param mixed $value
+     * @return array|null
+     * @throws LocalizedException
+     */
+    public function beforeValidateValue(Subject $subject, $value): ?array
+    {
+        $attribute = $subject->getAttribute();
+
+        if (!$attribute || $attribute->getAttributeCode() !== 'address_proof') {
+            return [$value];
+        }
+
+        if (!empty($value)) {
+            $source = $attribute->getSource();
+            if ($source && !$source->getOptionText($value)) {
+                $value = '';
+            }
+        }
+
+        return [$value];
+    }
+}
+
