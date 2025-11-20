@@ -1,0 +1,21 @@
+<?php
+require __DIR__ . '/vendor/autoload.php';
+use Laminas\Ldap\Ldap;
+use Laminas\Ldap\Exception\LdapException;
+
+$options = [
+    'host' => 'UATROOTDC1.UATAD.SBI',
+    'port' => 636,
+    'useSsl' => true,
+    'useStartTls' => true,
+    'bindRequiresDn' => true,
+    'baseDn' => 'DC=UATAD,DC=AD,DC=SBI',
+    'username' => 'CN=uat_ldap_mag_eos,OU=Domain Users,DC=UATAD,DC=SBI',
+    'password' => 'Circle1@pe123',
+];
+
+echo "=== TEST 1: ORIGINAL CONFIG ===\n";
+print_r($options);
+
+try { $ldap = new Ldap($options); $ldap->bind(); echo "SUCCESS\n"; }
+catch (LdapException $e) { echo $e->getMessage(); var_dump($e->getMessages()); }
