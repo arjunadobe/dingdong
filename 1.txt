@@ -6,7 +6,7 @@ use Lotus\Catalog\Api\Product\WhatsNewInterface;
 use Magento\Framework\Api\Search\SearchCriteriaBuilder;
 use Magento\Framework\Api\FilterBuilder;
 use Magento\Framework\Api\Search\FilterGroupBuilder;
-use Magento\Framework\Api\Search\FilterGroup;
+use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory as ProductCollectionFactory;
 
 class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNewInterface
 {
@@ -73,6 +73,16 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
     protected $filterGroupBuilder;
 
     /**
+     * @var ProductCollectionFactory
+     */
+    protected $productCollectionFactory;
+
+    /**
+     * @var \Lotus\Offer\Model\Offer
+     */
+    protected $offerCollection;
+
+    /**
      * @param \Magento\Catalog\Model\Entity\Attribute $attribute
      * @param \Magento\Store\Model\StoreManagerInterface $storeManager
      * @param \Lotus\Catalog\Api\Product\Data\CategoryProductListInterfaceFactory $productLinkFactory
@@ -81,7 +91,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      * @param \Magento\Catalog\Model\Product\Visibility $productVisibility
      * @param \Magento\Framework\App\RequestInterface $request
      * @param \Magento\Catalog\Api\CategoryRepositoryInterface $categoryRepository
-     * @param \Magento\Catalog\Model\ResourceModel\Product\CollectionFactory $productCollectionFactory
+     * @param ProductCollectionFactory $productCollectionFactory
      * @param \Magento\Framework\App\Config\ScopeConfigInterface $scopeConfig
      * @param \Magento\Framework\Search\Adapter\Mysql\TemporaryStorageFactory $temporaryStorageFactory
      * @param \Magento\Catalog\Model\Layer\Resolver $layerResolver
@@ -101,7 +111,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         \Magento\Catalog\Model\Product\Visibility $productVisibility,
         \Magento\Framework\App\RequestInterface $request,
         \Magento\Catalog\Api\CategoryRepositoryInterface $categoryRepository,
-        \Magento\Catalog\Model\ResourceModel\Product\CollectionFactory $productCollectionFactory,
+        ProductCollectionFactory $productCollectionFactory,
         \Magento\Framework\App\Config\ScopeConfigInterface $scopeConfig,
         \Magento\Framework\Search\Adapter\Mysql\TemporaryStorageFactory $temporaryStorageFactory,
         \Magento\Catalog\Model\Layer\Resolver $layerResolver,
@@ -124,6 +134,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         $this->filterBuilder        = $filterBuilder;
         $this->filterGroupBuilder   = $filterGroupBuilder ?: \Magento\Framework\App\ObjectManager::getInstance()
             ->get(FilterGroupBuilder::class);
+        $this->productCollectionFactory = $productCollectionFactory;
 
         parent::__construct(
             $attribute,
@@ -263,6 +274,10 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      */
     protected function buildWhatsNewSearchCriteria($storeId, $isNewOptionId, $pageSize = null)
     {
+        // Reset the search criteria builder to avoid conflicts
+        $this->searchCriteriaBuilder = $this->searchCriteriaBuilder->create()->__toArray();
+        $this->searchCriteriaBuilder = $this->searchCriteriaBuilderFactory->create();
+
         // Create individual filters
         $isNewFilter = $this->filterBuilder
             ->setField(self::IS_NEW)
@@ -438,6 +453,45 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         $link = $this->productLinkFactory->create();
         $link->setProducts($productData)
             ->setCount($collection->getSize());
+
+        return [$link];
+    }
+
+    /**
+     * Get attribute option ID from option value
+     *
+     * @param string $attributeCode
+     * @param string $optionValue
+     * @return int|null
+     */
+    protected function getAttributeIdFromOptionValue($attributeCode, $optionValue)
+    {
+        try {
+            $attribute = $this->attribute->loadByCode('catalog_product', $attributeCode);
+            $options = $attribute->getSource()->getAllOptions();
+            
+            foreach ($options as $option) {
+                if ($option['label'] == $optionValue) {
+                    return $option['value'];
+                }
+            }
+        } catch (\Exception $e) {
+            // Log error or handle as needed
+        }
+        
+        return null;
+    }
+
+    /**
+     * Return empty response when no data
+     *
+     * @return array
+     */
+    protected function noDataInResponse()
+    {
+        $link = $this->productLinkFactory->create();
+        $link->setProducts([])
+            ->setCount(0);
 
         return [$link];
     }
