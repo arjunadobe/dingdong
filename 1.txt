@@ -51,9 +51,14 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
     protected $searchCriteriaBuilder;
 
     /**
-     * @var \Magento\Framework\Api\SearchCriteriaBuilderFactory
+     * @var \Magento\Framework\Api\Search\SearchCriteriaBuilderFactory
      */
     protected $searchCriteriaBuilderFactory;
+
+    /**
+     * @var \Magento\Framework\Api\FilterBuilder
+     */
+    protected $filterBuilder;
 
     /**
      * @var \Magento\Catalog\Model\Product\Attribute\Source\Status
@@ -83,7 +88,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      * @param \Magento\Search\Api\SearchInterface $search
      * @param \Magento\Framework\Api\FilterBuilder $filterBuilder
      * @param \Magento\Catalog\Model\Config $catalogConfig
-     * @param \Magento\Framework\Api\SearchCriteriaBuilderFactory $searchCriteriaBuilderFactory
+     * @param \Magento\Framework\Api\Search\SearchCriteriaBuilderFactory $searchCriteriaBuilderFactory
      */
     public function __construct(
         \Magento\Catalog\Model\Entity\Attribute $attribute,
@@ -103,19 +108,20 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         \Magento\Search\Api\SearchInterface $search,
         \Magento\Framework\Api\FilterBuilder $filterBuilder,
         \Magento\Catalog\Model\Config $catalogConfig,
-        \Magento\Framework\Api\SearchCriteriaBuilderFactory $searchCriteriaBuilderFactory
+        \Magento\Framework\Api\Search\SearchCriteriaBuilderFactory $searchCriteriaBuilderFactory
     ) {
-        $this->productLinkFactory          = $productLinkFactory;
-        $this->offerCollection             = $offerCollection;
-        $this->productStatus               = $productStatus;
-        $this->productVisibility           = $productVisibility;
-        $this->_request                    = $request;
-        $this->search                      = $search;
-        $this->storeManager                = $storeManager;
-        $this->_scopeConfig                = $scopeConfig;
-        $this->searchCriteriaBuilder       = $searchCriteriaBuilder;
-        $this->searchCriteriaBuilderFactory = $searchCriteriaBuilderFactory;
-        $this->categoryRepository          = $categoryRepository;
+        $this->productLinkFactory            = $productLinkFactory;
+        $this->offerCollection               = $offerCollection;
+        $this->productStatus                 = $productStatus;
+        $this->productVisibility             = $productVisibility;
+        $this->_request                      = $request;
+        $this->search                        = $search;
+        $this->storeManager                  = $storeManager;
+        $this->_scopeConfig                  = $scopeConfig;
+        $this->searchCriteriaBuilder         = $searchCriteriaBuilder;
+        $this->searchCriteriaBuilderFactory  = $searchCriteriaBuilderFactory;
+        $this->categoryRepository            = $categoryRepository;
+        $this->filterBuilder                 = $filterBuilder;
 
         parent::__construct(
             $attribute,
@@ -155,7 +161,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         }
 
         try {
-            // Use a fresh SearchCriteriaBuilder instance
+            // Use a fresh SearchCriteriaBuilder (Search namespace) instance
             $builder = $this->searchCriteriaBuilderFactory->create();
 
             // Pagination
@@ -163,15 +169,24 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
             $builder->setCurrentPage(1);
 
             // Filter: isNew = Yes
-            $builder->addFilter(self::IS_NEW, $optionId, 'eq');
+            $isNewFilter = $this->filterBuilder
+                ->setField(self::IS_NEW)
+                ->setValue($optionId)
+                ->setConditionType('eq')
+                ->create();
+            $builder->addFilter($isNewFilter);
 
             // Optional: filter by segment_id
             if (!empty($segmentId)) {
-                $builder->addFilter('segment_id', $segmentId, 'eq');
+                $segmentFilter = $this->filterBuilder
+                    ->setField('segment_id')
+                    ->setValue($segmentId)
+                    ->setConditionType('eq')
+                    ->create();
+                $builder->addFilter($segmentFilter);
             }
 
             $searchCriteria = $builder->create();
-            $searchCriteria->setRequestName('catalog_view_container');
 
             $searchResult  = $this->search->search($searchCriteria);
             $totalRecords  = $searchResult->getTotalCount();
@@ -216,24 +231,31 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         }
 
         try {
-            // Fresh builder again
             $builder = $this->searchCriteriaBuilderFactory->create();
 
             // Filter: isNew = Yes
-            $builder->addFilter(self::IS_NEW, $optionId, 'eq');
+            $isNewFilter = $this->filterBuilder
+                ->setField(self::IS_NEW)
+                ->setValue($optionId)
+                ->setConditionType('eq')
+                ->create();
+            $builder->addFilter($isNewFilter);
 
             // Optional: filter by segment_id
             if (!empty($segmentId)) {
-                $builder->addFilter('segment_id', $segmentId, 'eq');
+                $segmentFilter = $this->filterBuilder
+                    ->setField('segment_id')
+                    ->setValue($segmentId)
+                    ->setConditionType('eq')
+                    ->create();
+                $builder->addFilter($segmentFilter);
             }
 
-            // You can set page size / current page here if you want adapter-level pagination,
-            // but you already do pagination later on the collection.
+            // Adapter-level pagination is optional; you already page on collection
             // $builder->setPageSize($this->pageSize);
             // $builder->setCurrentPage($page ?: 1);
 
             $searchCriteria = $builder->create();
-            $searchCriteria->setRequestName('catalog_view_container');
 
             $searchResult = $this->search->search($searchCriteria);
             $items        = $searchResult->getItems();
@@ -241,7 +263,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
             $collection = $this->getLayerProductCollection($items, $storeId);
             $collection->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => '']);
 
-            // Sorting helper (from your AbstractModel)
+            // Sorting helper from AbstractModel
             $this->getSortedProductCollection(
                 $collection,
                 $sort,
@@ -250,7 +272,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
                 self::WHATS_NEW_RANK
             );
 
-            // Pagination helper (from your AbstractModel)
+            // Pagination helper from AbstractModel
             $productCollection = $this->getPagination($collection, $searchResult, $page);
 
             return $this->formatedOutput($productCollection, $storeId, $searchResult, $segmentId);
