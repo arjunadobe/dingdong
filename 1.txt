@@ -274,10 +274,6 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      */
     protected function buildWhatsNewSearchCriteria($storeId, $isNewOptionId, $pageSize = null)
     {
-        // Reset the search criteria builder to avoid conflicts
-        $this->searchCriteriaBuilder = $this->searchCriteriaBuilder->create()->__toArray();
-        $this->searchCriteriaBuilder = $this->searchCriteriaBuilderFactory->create();
-
         // Create individual filters
         $isNewFilter = $this->filterBuilder
             ->setField(self::IS_NEW)
@@ -464,7 +460,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      * @param string $optionValue
      * @return int|null
      */
-    protected function getAttributeIdFromOptionValue($attributeCode, $optionValue)
+    public function getAttributeIdFromOptionValue($attributeCode, $optionValue)
     {
         try {
             $attribute = $this->attribute->loadByCode('catalog_product', $attributeCode);
