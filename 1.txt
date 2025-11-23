@@ -6,6 +6,7 @@ use Lotus\Catalog\Api\Product\WhatsNewInterface;
 use Magento\Framework\Api\Search\SearchCriteriaBuilder;
 use Magento\Framework\Api\FilterBuilder;
 use Magento\Framework\Api\Search\FilterGroupBuilder;
+use Magento\Framework\Api\Search\FilterGroup;
 
 class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNewInterface
 {
@@ -89,7 +90,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      * @param \Magento\Search\Api\SearchInterface $search
      * @param FilterBuilder $filterBuilder
      * @param \Magento\Catalog\Model\Config $catalogConfig
-     * @param FilterGroupBuilder $filterGroupBuilder
+     * @param FilterGroupBuilder|null $filterGroupBuilder
      */
     public function __construct(
         \Magento\Catalog\Model\Entity\Attribute $attribute,
@@ -109,7 +110,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         \Magento\Search\Api\SearchInterface $search,
         FilterBuilder $filterBuilder,
         \Magento\Catalog\Model\Config $catalogConfig,
-        FilterGroupBuilder $filterGroupBuilder = null
+        ?FilterGroupBuilder $filterGroupBuilder = null
     ) {
         $this->productLinkFactory   = $productLinkFactory;
         $this->offerCollection      = $offerCollection;
@@ -190,7 +191,21 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
 
             return $links;
         } catch (\Exception $e) {
-            throw new \Exception(__($e->getMessage()));
+            // Fallback to direct collection if search fails
+            $collection = $this->getProductsFallback($storeId, $optionId, $productLimit);
+            $collection->addAttributeToSort(self::WHATS_NEW_RANK, self::ASC)
+                ->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => '']);
+
+            $productData = $this->getProductData($collection, $storeId, $segmentId);
+
+            $link = $this->productLinkFactory->create();
+            $link->setProducts($productData)
+                ->setCount($collection->getSize());
+
+            $links   = [];
+            $links[] = $link;
+
+            return $links;
         }
     }
 
@@ -246,7 +261,24 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
 
             return $this->formatedOutput($productCollection, $storeId, $searchResult, $segmentId);
         } catch (\Exception $e) {
-            throw new \Exception(__($e->getMessage()));
+            // Fallback to direct collection if search fails
+            $collection = $this->getProductsFallback($storeId, $optionId);
+            $collection->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => '']);
+
+            $this->getSortedProductCollection(
+                $collection,
+                $sort,
+                $direction,
+                $dir,
+                self::WHATS_NEW_RANK
+            );
+
+            // Apply pagination manually
+            if ($page) {
+                $collection->setCurPage($page);
+            }
+
+            return $this->formatedOutputFallback($collection, $storeId, $segmentId);
         }
     }
 
@@ -256,8 +288,8 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      * Ensures we always have at least one filter so the search layer
      * doesn't throw "The request query and filters aren't set".
      *
-     * @param int      $storeId
-     * @param int      $isNewOptionId
+     * @param int $storeId
+     * @param int $isNewOptionId
      * @param int|null $pageSize
      * @return \Magento\Framework\Api\Search\SearchCriteria
      */
@@ -315,7 +347,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
     }
 
     /**
-     * Alternative method using addFilters method (if available in your Magento version)
+     * Alternative method using addFilter method (correct method name)
      *
      * @param int $storeId
      * @param int $isNewOptionId
@@ -324,30 +356,81 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      */
     protected function buildWhatsNewSearchCriteriaAlternative($storeId, $isNewOptionId, $pageSize = null)
     {
-        $this->searchCriteriaBuilder->addFilters([
+        // Reset the builder
+        $this->searchCriteriaBuilder->setFilterGroups([]);
+        
+        // Use addFilter (singular) instead of addFilters (plural)
+        $this->searchCriteriaBuilder->addFilter(
             $this->filterBuilder
                 ->setField(self::IS_NEW)
                 ->setValue($isNewOptionId)
                 ->setConditionType('eq')
                 ->create()
-        ]);
+        );
 
-        $this->searchCriteriaBuilder->addFilters([
+        $this->searchCriteriaBuilder->addFilter(
             $this->filterBuilder
                 ->setField('status')
                 ->setValue($this->productStatus->getVisibleStatusIds())
                 ->setConditionType('in')
                 ->create()
-        ]);
+        );
 
-        $this->searchCriteriaBuilder->addFilters([
+        $this->searchCriteriaBuilder->addFilter(
             $this->filterBuilder
                 ->setField('visibility')
                 ->setValue($this->productVisibility->getVisibleInCatalogIds())
                 ->setConditionType('in')
                 ->create()
-        ]);
+        );
 
+        $this->searchCriteriaBuilder->setCurrentPage(1);
+
+        if ($pageSize) {
+            $this->searchCriteriaBuilder->setPageSize($pageSize);
+        }
+
+        return $this->searchCriteriaBuilder->create();
+    }
+
+    /**
+     * Simple method using manual FilterGroup creation
+     *
+     * @param int $storeId
+     * @param int $isNewOptionId
+     * @param int|null $pageSize
+     * @return \Magento\Framework\Api\Search\SearchCriteria
+     */
+    protected function buildWhatsNewSearchCriteriaSimple($storeId, $isNewOptionId, $pageSize = null)
+    {
+        $filters = [];
+        
+        // Filter: is_new = "Yes" option
+        $filters[] = $this->filterBuilder
+            ->setField(self::IS_NEW)
+            ->setValue($isNewOptionId)
+            ->setConditionType('eq')
+            ->create();
+
+        // Only enabled products
+        $filters[] = $this->filterBuilder
+            ->setField('status')
+            ->setValue($this->productStatus->getVisibleStatusIds())
+            ->setConditionType('in')
+            ->create();
+
+        // Only catalog-visible products
+        $filters[] = $this->filterBuilder
+            ->setField('visibility')
+            ->setValue($this->productVisibility->getVisibleInCatalogIds())
+            ->setConditionType('in')
+            ->create();
+
+        // Create filter group
+        $filterGroup = $this->filterGroupBuilder->setFilters($filters)->create();
+
+        // Build search criteria
+        $this->searchCriteriaBuilder->setFilterGroups([$filterGroup]);
         $this->searchCriteriaBuilder->setCurrentPage(1);
 
         if ($pageSize) {
@@ -369,6 +452,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
     {
         $collection = $this->productCollectionFactory->create();
         $collection->addStoreFilter($storeId);
+        $collection->addAttributeToSelect('*');
         $collection->addAttributeToFilter(self::IS_NEW, $isNewOptionId);
         $collection->addAttributeToFilter('status', ['in' => $this->productStatus->getVisibleStatusIds()]);
         $collection->addAttributeToFilter('visibility', ['in' => $this->productVisibility->getVisibleInCatalogIds()]);
@@ -378,5 +462,24 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         }
 
         return $collection;
+    }
+
+    /**
+     * Format output for fallback method
+     *
+     * @param \Magento\Catalog\Model\ResourceModel\Product\Collection $collection
+     * @param int $storeId
+     * @param string $segmentId
+     * @return array
+     */
+    protected function formatedOutputFallback($collection, $storeId, $segmentId)
+    {
+        $productData = $this->getProductData($collection, $storeId, $segmentId);
+
+        $link = $this->productLinkFactory->create();
+        $link->setProducts($productData)
+            ->setCount($collection->getSize());
+
+        return [$link];
     }
 }
