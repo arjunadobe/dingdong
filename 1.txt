@@ -42,21 +42,29 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
 
     /**
      * @var \Magento\Search\Api\SearchInterface
+     *
+     * Kept for DI compatibility but NOT used anymore in this class.
      */
     private $search;
 
     /**
      * @var \Magento\Framework\Api\Search\SearchCriteriaBuilder
+     *
+     * Kept for parent/DI compatibility, not used here.
      */
     protected $searchCriteriaBuilder;
 
     /**
      * @var \Magento\Framework\Api\Search\SearchCriteriaBuilderFactory
+     *
+     * Kept for DI compatibility, not used here.
      */
     protected $searchCriteriaBuilderFactory;
 
     /**
      * @var \Magento\Framework\Api\FilterBuilder
+     *
+     * Kept for parent/DI compatibility, not used here.
      */
     protected $filterBuilder;
 
@@ -69,6 +77,11 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      * @var \Magento\Catalog\Model\Product\Visibility
      */
     protected $productVisibility;
+
+    /**
+     * @var \Magento\Catalog\Model\ResourceModel\Product\CollectionFactory
+     */
+    protected $productCollectionFactory;
 
     /**
      * @param \Magento\Catalog\Model\Entity\Attribute $attribute
@@ -122,6 +135,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         $this->searchCriteriaBuilderFactory  = $searchCriteriaBuilderFactory;
         $this->categoryRepository            = $categoryRepository;
         $this->filterBuilder                 = $filterBuilder;
+        $this->productCollectionFactory      = $productCollectionFactory;
 
         parent::__construct(
             $attribute,
@@ -154,67 +168,62 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         $this->storeManager->setCurrentStore($storeId);
         $productLimit = empty($limit) ? $this->pageSize : (int)$limit;
 
-        // Get option id for "Yes" of isNew attribute
+        // Get option id for "Yes" of isNew attribute (e.g., 36)
         $optionId = $this->getAttributeIdFromOptionValue(self::IS_NEW, "Yes");
         if (!$optionId) {
             return $this->noDataInResponse();
         }
 
         try {
-            // Use a fresh SearchCriteriaBuilder (Search namespace) instance
-            $builder = $this->searchCriteriaBuilderFactory->create();
+            /** @var \Magento\Catalog\Model\ResourceModel\Product\Collection $collection */
+            $collection = $this->productCollectionFactory->create();
+            $collection->setStoreId($storeId);
+            $collection->addStoreFilter($storeId);
+            $collection->addAttributeToSelect('*');
 
-            // Pagination
-            $builder->setPageSize($productLimit);
-            $builder->setCurrentPage(1);
+            // Status & visibility
+            $collection->addAttributeToFilter(
+                'status',
+                \Magento\Catalog\Model\Product\Attribute\Source\Status::STATUS_ENABLED
+            );
+            $collection->setVisibility($this->productVisibility->getVisibleInCatalogIds());
 
-            // Filter: isNew = Yes
-            $isNewFilter = $this->filterBuilder
-                ->setField(self::IS_NEW)
-                ->setValue($optionId)
-                ->setConditionType('eq')
-                ->create();
-            $builder->addFilter($isNewFilter);
+            // Filter: is_new = Yes (option id)
+            $collection->addAttributeToFilter(self::IS_NEW, $optionId);
 
-            // Optional: filter by segment_id
+            // Filter: segment_id (if given)
             if (!empty($segmentId)) {
-                $segmentFilter = $this->filterBuilder
-                    ->setField('segment_id')
-                    ->setValue($segmentId)
-                    ->setConditionType('eq')
-                    ->create();
-                $builder->addFilter($segmentFilter);
+                $collection->addAttributeToFilter('segment_id', $segmentId);
             }
 
-            // Create criteria and set request name HERE
-            $searchCriteria = $builder->create();
-            // This request name must exist in etc/search_request.xml
-            $searchCriteria->setRequestName('catalog_view_container');
+            // whats_new_rank not empty + sort
+            $collection->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => '']);
+            $collection->addAttributeToSort(self::WHATS_NEW_RANK, self::ASC);
 
-            $searchResult  = $this->search->search($searchCriteria);
-            $totalRecords  = $searchResult->getTotalCount();
-            $items         = $searchResult->getItems();
+            // Pagination
+            $collection->setPageSize($productLimit);
+            $collection->setCurPage(1);
 
-            $collection = $this->getLayerProductCollection($items, $storeId);
-            $collection->addAttributeToSort(self::WHATS_NEW_RANK, self::ASC)
-                ->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => ''])
-                ->setPageSize($productLimit);
+            $totalRecords = $collection->getSize();
 
+            // Your existing formatter
             $productData = $this->getProductData($collection, $storeId, $segmentId);
 
             $link = $this->productLinkFactory->create();
             $link->setProducts($productData)
-                ->setCount($totalRecords);
+                 ->setCount($totalRecords);
 
-            $links[] = $link;
+            return [$link];
 
-            return $links;
         } catch (\Exception $e) {
             throw new \Exception(__($e->getMessage()));
         }
     }
 
     /**
+     * Optional: keep this implemented for interface compatibility.
+     * If you don't want it at all, remove it from WhatsNewInterface also.
+     *
      * @param string $segmentId
      * @param int $storeId
      * @param string|null $sort
@@ -233,41 +242,36 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
             return $this->noDataInResponse();
         }
 
+        // Default pagination values
+        $page      = $page ? (int)$page : 1;
+        $pageSize  = $this->pageSize;
+
         try {
-            $builder = $this->searchCriteriaBuilderFactory->create();
+            /** @var \Magento\Catalog\Model\ResourceModel\Product\Collection $collection */
+            $collection = $this->productCollectionFactory->create();
+            $collection->setStoreId($storeId);
+            $collection->addStoreFilter($storeId);
+            $collection->addAttributeToSelect('*');
 
-            // Filter: isNew = Yes
-            $isNewFilter = $this->filterBuilder
-                ->setField(self::IS_NEW)
-                ->setValue($optionId)
-                ->setConditionType('eq')
-                ->create();
-            $builder->addFilter($isNewFilter);
+            // Status & visibility
+            $collection->addAttributeToFilter(
+                'status',
+                \Magento\Catalog\Model\Product\Attribute\Source\Status::STATUS_ENABLED
+            );
+            $collection->setVisibility($this->productVisibility->getVisibleInCatalogIds());
 
-            // Optional: filter by segment_id
+            // Filter: is_new = Yes (option id)
+            $collection->addAttributeToFilter(self::IS_NEW, $optionId);
+
+            // Filter: segment_id (if given)
             if (!empty($segmentId)) {
-                $segmentFilter = $this->filterBuilder
-                    ->setField('segment_id')
-                    ->setValue($segmentId)
-                    ->setConditionType('eq')
-                    ->create();
-                $builder->addFilter($segmentFilter);
+                $collection->addAttributeToFilter('segment_id', $segmentId);
             }
 
-            // Optional: adapter-level pagination
-            // $builder->setPageSize($this->pageSize);
-            // $builder->setCurrentPage($page ?: 1);
-
-            $searchCriteria = $builder->create();
-            $searchCriteria->setRequestName('catalog_view_container');
-
-            $searchResult = $this->search->search($searchCriteria);
-            $items        = $searchResult->getItems();
-
-            $collection = $this->getLayerProductCollection($items, $storeId);
+            // whats_new_rank not empty
             $collection->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => '']);
 
-            // Sorting helper from AbstractModel
+            // Sorting: use your helper to preserve existing behavior
             $this->getSortedProductCollection(
                 $collection,
                 $sort,
@@ -276,10 +280,24 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
                 self::WHATS_NEW_RANK
             );
 
-            // Pagination helper from AbstractModel
-            $productCollection = $this->getPagination($collection, $searchResult, $page);
+            // Pagination
+            $collection->setPageSize($pageSize);
+            $collection->setCurPage($page);
 
-            return $this->formatedOutput($productCollection, $storeId, $searchResult, $segmentId);
+            // We don't have SearchResultInterface here, but getPagination/formatedOutput
+            // likely expects it; if so, you can compute a lightweight object or
+            // simply bypass them and use getProductData directly.
+            // For now let's keep it simple and inline it:
+
+            $totalRecords = $collection->getSize();
+            $productData  = $this->getProductData($collection, $storeId, $segmentId);
+
+            $link = $this->productLinkFactory->create();
+            $link->setProducts($productData)
+                 ->setCount($totalRecords);
+
+            return [$link];
+
         } catch (\Exception $e) {
             throw new \Exception(__($e->getMessage()));
         }
