@@ -1,231 +1,289 @@
 <?php
-use Magento\Framework\App\Bootstrap;
-use Laminas\Ldap\Ldap;
-use Laminas\Ldap\Exception\LdapException;
 
-require __DIR__ . '/app/bootstrap.php';
+namespace Lotus\Catalog\Model\Product;
 
-$bootstrap = Bootstrap::create(BP, $_SERVER);
-$objectManager = $bootstrap->getObjectManager();
+use Lotus\Catalog\Api\Product\WhatsNewInterface;
 
-$config = [
-    'host'        => 'ldap.forumsys.com',
-    'port'        => 389,
-    'username'    => 'cn=read-only-admin,dc=example,dc=com',
-    'password'    => 'password',
-    'baseDn'      => 'dc=example,dc=com',
-    'bindRequiresDn' => true,
-    'networkTimeout' => 10,
-    'reconnectAttempts' => 2,
-];
+class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNewInterface
+{
+    /**
+     * @var array
+     */
+    protected $responseArr = [];
 
-echo "🔍 LDAP Connection Diagnostics\n";
-echo "=============================\n";
+    /**
+     * Default page size.
+     *
+     * @var int
+     */
+    public $pageSize = 10;
 
-// Test 1: Basic connection and DNS resolution
-echo "1. Testing DNS resolution for '{$config['host']}'...\n";
-$ip = gethostbyname($config['host']);
-if ($ip === $config['host']) {
-    echo "   ✗ DNS resolution failed - cannot resolve hostname\n";
-    exit;
-} else {
-    echo "   ✓ DNS resolved to: $ip\n";
-}
+    /**
+     * @var \Magento\Framework\App\RequestInterface
+     */
+    private $_request;
 
-// Test 2: Port connectivity
-echo "2. Testing port {$config['port']} connectivity...\n";
-$socket = @fsockopen($config['host'], $config['port'], $errno, $errstr, 5);
-if ($socket) {
-    echo "   ✓ Port {$config['port']} is open and accessible\n";
-    fclose($socket);
-} else {
-    echo "   ✗ Port {$config['port']} connection failed: $errstr (code: $errno)\n";
-    exit;
-}
+    /**
+     * @var \Lotus\Catalog\Api\Product\Data\CategoryProductListInterfaceFactory
+     */
+    protected $productLinkFactory;
 
-// Test 3: LDAP connection and bind with service account
-echo "3. Testing LDAP connection and bind...\n";
-$ldap = new Ldap($config);
+    /**
+     * @var \Magento\Store\Model\StoreManagerInterface
+     */
+    protected $storeManager;
 
-try {
-    $ldap->bind();
-    echo "   ✓ LDAP connection established successfully\n";
-    echo "   ✓ LDAP bind successful with service account\n";
+    /**
+     * @var \Magento\Framework\App\Config\ScopeConfigInterface
+     */
+    protected $_scopeConfig;
 
-    // Get connection details
-    $boundUser = $ldap->getBoundUser();
-    echo "   - Bound as: " . ($boundUser ?: 'Anonymous') . "\n";
+    /**
+     * @var \Magento\Search\Api\SearchInterface
+     */
+    private $search;
 
-} catch (LdapException $e) {
-    echo "   ✗ LDAP connection/bind failed\n";
-    echo "   - Error: " . $e->getMessage() . "\n";
-    echo "   - Code: " . $e->getCode() . "\n";
-    exit;
-}
+    /**
+     * @var \Magento\Catalog\Model\Product\Attribute\Source\Status
+     */
+    protected $productStatus;
 
-// Test 4: Search capability
-echo "\n4. Testing LDAP search functionality...\n";
-try {
-    $testResults = $ldap->search('(objectClass=*)', $config['baseDn'], Ldap::SEARCH_SCOPE_BASE);
-    echo "   ✓ Base DN search successful\n";
-    echo "   - Base DN: {$config['baseDn']}\n";
-} catch (LdapException $e) {
-    echo "   ✗ Base DN search failed\n";
-    echo "   - Error: " . $e->getMessage() . "\n";
-}
+    /**
+     * @var \Magento\Catalog\Model\Product\Visibility
+     */
+    protected $productVisibility;
 
-// Test 5: User search and authentication (FIXED)
-echo "\n5. Testing user search and authentication...\n";
+    /**
+     * @var \Magento\Framework\Api\Search\SearchCriteriaBuilder
+     */
+    protected $searchCriteriaBuilder;
 
-$testUsers = [
-    'einstein' => ['password', 'Should work - valid user with correct password'],
-    'newton' => ['password', 'Should work - valid user with correct password'],
-    'invaliduser' => ['password', 'Should fail - user does not exist'],
-    'einstein' => ['wrongpassword', 'Should fail - valid user but wrong password'],
-];
+    /**
+     * @var \Magento\Framework\Api\FilterBuilder
+     */
+    protected $filterBuilder;
 
-foreach ($testUsers as $username => [$password, $description]) {
-    echo "\n   Testing: $username\n";
-    echo "   Description: $description\n";
-    echo "   " . str_repeat('-', 50) . "\n";
+    /**
+     * @param \Magento\Catalog\Model\Entity\Attribute $attribute
+     * @param \Magento\Store\Model\StoreManagerInterface $storeManager
+     * @param \Lotus\Catalog\Api\Product\Data\CategoryProductListInterfaceFactory $productLinkFactory
+     * @param \Lotus\Offer\Model\Offer $offerCollection
+     * @param \Magento\Catalog\Model\Product\Attribute\Source\Status $productStatus
+     * @param \Magento\Catalog\Model\Product\Visibility $productVisibility
+     * @param \Magento\Framework\App\RequestInterface $request
+     * @param \Magento\Catalog\Api\CategoryRepositoryInterface $categoryRepository
+     * @param \Magento\Catalog\Model\ResourceModel\Product\CollectionFactory $productCollectionFactory
+     * @param \Magento\Framework\App\Config\ScopeConfigInterface $scopeConfig
+     * @param \Magento\Framework\Search\Adapter\Mysql\TemporaryStorageFactory $temporaryStorageFactory
+     * @param \Magento\Catalog\Model\Layer\Resolver $layerResolver
+     * @param \Magento\Catalog\Model\Product $product
+     * @param \Magento\Framework\Api\Search\SearchCriteriaBuilder $searchCriteriaBuilder
+     * @param \Magento\Search\Api\SearchInterface $search
+     * @param \Magento\Framework\Api\FilterBuilder $filterBuilder
+     * @param \Magento\Catalog\Model\Config $catalogConfig
+     */
+    public function __construct(
+        \Magento\Catalog\Model\Entity\Attribute $attribute,
+        \Magento\Store\Model\StoreManagerInterface $storeManager,
+        \Lotus\Catalog\Api\Product\Data\CategoryProductListInterfaceFactory $productLinkFactory,
+        \Lotus\Offer\Model\Offer $offerCollection,
+        \Magento\Catalog\Model\Product\Attribute\Source\Status $productStatus,
+        \Magento\Catalog\Model\Product\Visibility $productVisibility,
+        \Magento\Framework\App\RequestInterface $request,
+        \Magento\Catalog\Api\CategoryRepositoryInterface $categoryRepository,
+        \Magento\Catalog\Model\ResourceModel\Product\CollectionFactory $productCollectionFactory,
+        \Magento\Framework\App\Config\ScopeConfigInterface $scopeConfig,
+        \Magento\Framework\Search\Adapter\Mysql\TemporaryStorageFactory $temporaryStorageFactory,
+        \Magento\Catalog\Model\Layer\Resolver $layerResolver,
+        \Magento\Catalog\Model\Product $product,
+        \Magento\Framework\Api\Search\SearchCriteriaBuilder $searchCriteriaBuilder,
+        \Magento\Search\Api\SearchInterface $search,
+        \Magento\Framework\Api\FilterBuilder $filterBuilder,
+        \Magento\Catalog\Model\Config $catalogConfig
+    ) {
+        $this->productLinkFactory   = $productLinkFactory;
+        $this->offerCollection      = $offerCollection;
+        $this->productStatus        = $productStatus;
+        $this->productVisibility    = $productVisibility;
+        $this->_request             = $request;
+        $this->search               = $search;
+        $this->storeManager         = $storeManager;
+        $this->_scopeConfig         = $scopeConfig;
+        $this->searchCriteriaBuilder = $searchCriteriaBuilder;
+        $this->filterBuilder        = $filterBuilder;
 
-    try {
-        // Search for user using service account connection
-        $results = $ldap->search("(uid=$username)", $config['baseDn']);
+        parent::__construct(
+            $attribute,
+            $categoryRepository,
+            $productLinkFactory,
+            $storeManager,
+            $offerCollection,
+            $productCollectionFactory,
+            $scopeConfig,
+            $temporaryStorageFactory,
+            $layerResolver,
+            $product,
+            $searchCriteriaBuilder,
+            $search,
+            $filterBuilder,
+            $catalogConfig
+        );
+    }
 
-        if ($results->count() > 0) {
-            foreach ($results as $result) {
-                echo "   ✓ User found in LDAP:\n";
-                echo "     - DN: " . $result['dn'] . "\n";
-                echo "     - CN: " . ($result['cn'][0] ?? 'N/A') . "\n";
-                echo "     - UID: " . ($result['uid'][0] ?? 'N/A') . "\n";
+    /**
+     * Get limited list of new products.
+     *
+     * @param string   $segmentId
+     * @param int      $storeId
+     * @param int|null $limit
+     * @return string[]
+     * @throws \Exception
+     */
+    public function getNewProducts($segmentId, $storeId, $limit = null)
+    {
+        $this->storeManager->setCurrentStore($storeId);
 
-                // Test authentication - FIXED APPROACH
-                try {
-                    // Create a NEW LDAP instance with FULL configuration for user bind
-                    $userLdap = new Ldap([
-                        'host' => $config['host'],
-                        'port' => $config['port'],
-                        'username' => $result['dn'], // User's DN for binding
-                        'password' => $password,     // User's password
-                        'baseDn' => $config['baseDn'],
-                        'bindRequiresDn' => true,
-                        'networkTimeout' => 10,
-                    ]);
+        $productLimit = empty($limit) ? $this->pageSize : (int)$limit;
 
-                    // This will try to bind with the user's credentials
-                    $userLdap->bind();
-                    echo "     ✅ Authentication SUCCESSFUL\n";
-                    echo "     ✓ User '$username' can log in with provided password\n";
+        // Get "Yes" option id for is_new attribute
+        $optionId = $this->getAttributeIdFromOptionValue(self::IS_NEW, 'Yes');
 
-                } catch (LdapException $e) {
-                    echo "     ❌ Authentication FAILED\n";
-                    echo "       - Error: " . $e->getMessage() . "\n";
-                    echo "       - Code: " . $e->getCode() . "\n";
-
-                    // Provide specific error guidance
-                    switch ($e->getCode()) {
-                        case 49:
-                            if ($password === 'wrongpassword') {
-                                echo "       💡 Expected - password is incorrect\n";
-                            } else {
-                                echo "       💡 Invalid credentials - check username/password\n";
-                            }
-                            break;
-                        case 32:
-                            echo "       💡 User not found in directory\n";
-                            break;
-                        case 53:
-                            echo "       💡 Account disabled or restricted\n";
-                            break;
-                        default:
-                            echo "       💡 Authentication failed for unknown reason\n";
-                    }
-                }
-                break; // Only test first result
-            }
-        } else {
-            echo "   ❌ User '$username' not found in LDAP\n";
-            if ($username === 'invaliduser') {
-                echo "       💡 Expected - this user doesn't exist in the directory\n";
-            } else {
-                echo "       💡 Check if:\n";
-                echo "          - Username is correct\n";
-                echo "          - Search filter is correct\n";
-                echo "          - User exists in the Base DN\n";
-            }
+        if (!$optionId) {
+            return $this->noDataInResponse();
         }
 
-    } catch (LdapException $e) {
-        echo "   ❌ Search failed for '$username'\n";
-        echo "     - Error: " . $e->getMessage() . "\n";
-        echo "     - Code: " . $e->getCode() . "\n";
-    }
-}
+        try {
+            // Build a valid SearchCriteria with at least one filter
+            $searchCriteria = $this->buildWhatsNewSearchCriteria($storeId, $optionId, $productLimit);
 
-// Test 6: Alternative authentication test using the same connection
-echo "\n6. Testing alternative authentication method...\n";
-try {
-    // Re-bind with service account first (to restore connection)
-    $ldap->bind();
+            $searchResult  = $this->search->search($searchCriteria);
+            $totalRecords  = $searchResult->getTotalCount();
+            $items         = $searchResult->getItems();
 
-    // Search for einstein
-    $results = $ldap->search("(uid=einstein)", $config['baseDn']);
+            $collection = $this->getLayerProductCollection($items, $storeId);
 
-    if ($results->count() > 0) {
-        $user = $results->current();
-        $userDn = $user['dn'];
+            $collection
+                ->addAttributeToSort(self::WHATS_NEW_RANK, self::ASC)
+                ->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => ''])
+                ->setPageSize($productLimit);
 
-        echo "   Testing direct bind with user DN: $userDn\n";
+            $productData = $this->getProductData($collection, $storeId, $segmentId);
 
-        // Method 1: Create completely new connection for user
-        $userLdap = new Ldap($config); // Start with same config
-        $userLdap->bind($userDn, 'password'); // Then bind with user credentials
+            $link = $this->productLinkFactory->create();
+            $link->setProducts($productData)
+                ->setCount($totalRecords);
 
-        echo "   ✓ Alternative auth method SUCCESSFUL\n";
+            $links   = [];
+            $links[] = $link;
 
-    }
-} catch (LdapException $e) {
-    echo "   ✗ Alternative auth failed: " . $e->getMessage() . "\n";
-}
-
-// Test 7: Available users listing
-echo "\n7. Listing available test users...\n";
-try {
-    $allUsers = $ldap->search('(objectClass=inetOrgPerson)', $config['baseDn']);
-    echo "   ✓ Found {$allUsers->count()} users in directory\n";
-
-    if ($allUsers->count() > 0) {
-        echo "   Available users (username / password):\n";
-        $count = 0;
-        foreach ($allUsers as $user) {
-            $uid = $user['uid'][0] ?? 'N/A';
-            $cn = $user['cn'][0] ?? 'N/A';
-            if ($uid !== 'N/A') {
-                echo "     - $uid / password ($cn)\n";
-                $count++;
-                if ($count >= 5) break; // Show first 5 users
-            }
+            return $links;
+        } catch (\Exception $e) {
+            throw new \Exception(__($e->getMessage()));
         }
     }
-} catch (LdapException $e) {
-    echo "   ✗ Failed to list users: " . $e->getMessage() . "\n";
+
+    /**
+     * Get all new products with sorting + pagination.
+     *
+     * @param string      $segmentId
+     * @param int         $storeId
+     * @param string|null $sort
+     * @param string|null $direction
+     * @param string|null $dir
+     * @param int|null    $page
+     * @return string[]
+     * @throws \Exception
+     */
+    public function getAllNewProducts(
+        $segmentId,
+        $storeId,
+        $sort = null,
+        $direction = null,
+        $dir = null,
+        $page = null
+    ) {
+        $this->storeManager->setCurrentStore($storeId);
+
+        $optionId = $this->getAttributeIdFromOptionValue(self::IS_NEW, 'Yes');
+
+        if (!$optionId) {
+            return $this->noDataInResponse();
+        }
+
+        try {
+            // For "all" products we don't force a pageSize here – pagination is handled later
+            $searchCriteria = $this->buildWhatsNewSearchCriteria($storeId, $optionId);
+
+            $searchResult = $this->search->search($searchCriteria);
+            $items        = $searchResult->getItems();
+
+            $collection = $this->getLayerProductCollection($items, $storeId);
+            $collection->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => '']);
+
+            // Use your existing helper to apply custom sorting
+            $this->getSortedProductCollection(
+                $collection,
+                $sort,
+                $direction,
+                $dir,
+                self::WHATS_NEW_RANK
+            );
+
+            // Existing pagination helper using search result + page
+            $productCollection = $this->getPagination($collection, $searchResult, $page);
+
+            return $this->formatedOutput($productCollection, $storeId, $searchResult, $segmentId);
+        } catch (\Exception $e) {
+            throw new \Exception(__($e->getMessage()));
+        }
+    }
+
+    /**
+     * Build SearchCriteria for "What's New" products.
+     *
+     * Ensures we always have at least one filter so the search layer
+     * doesn't throw "The request query and filters aren't set".
+     *
+     * @param int      $storeId
+     * @param int      $isNewOptionId
+     * @param int|null $pageSize
+     * @return \Magento\Framework\Api\Search\SearchCriteria
+     */
+    protected function buildWhatsNewSearchCriteria($storeId, $isNewOptionId, $pageSize = null)
+    {
+        // Reset builder to avoid carrying filters/page data between calls
+        $this->searchCriteriaBuilder->setFilterGroups([]);
+        $this->searchCriteriaBuilder->setPageSize(null);
+        $this->searchCriteriaBuilder->setCurrentPage(1);
+
+        if ($pageSize) {
+            $this->searchCriteriaBuilder->setPageSize($pageSize);
+        }
+
+        // Filter: is_new = "Yes" option
+        $this->searchCriteriaBuilder->addFilter(
+            self::IS_NEW,
+            $isNewOptionId,
+            'eq'
+        );
+
+        // Only enabled products
+        $this->searchCriteriaBuilder->addFilter(
+            'status',
+            $this->productStatus->getVisibleStatusIds(),
+            'in'
+        );
+
+        // Only catalog-visible products
+        $this->searchCriteriaBuilder->addFilter(
+            'visibility',
+            $this->productVisibility->getVisibleInCatalogIds(),
+            'in'
+        );
+
+        // Optional: restrict to store (if needed / if attribute exists)
+        // $this->searchCriteriaBuilder->addFilter('store_id', $storeId, 'eq');
+
+        return $this->searchCriteriaBuilder->create();
+    }
 }
-
-echo "\n" . str_repeat('=', 50) . "\n";
-echo "🏁 LDAP Diagnostics Complete\n";
-
-// Summary
-echo "\nSummary:\n";
-echo "-------\n";
-echo "✓ DNS Resolution: Working\n";
-echo "✓ Port 389: Accessible\n";
-echo "✓ LDAP Connection: Established\n";
-echo "✓ Service Account Bind: Successful\n";
-echo "✓ User Search: Functional\n";
-echo "\nCommon Issues Fixed:\n";
-echo "- Used proper LDAP configuration for user binds\n";
-echo "- Provided complete config for new LDAP instances\n";
-echo "- Better error handling and diagnostics\n";
-
- 
