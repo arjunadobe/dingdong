@@ -164,10 +164,6 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
             // Use a fresh SearchCriteriaBuilder (Search namespace) instance
             $builder = $this->searchCriteriaBuilderFactory->create();
 
-            // Request name – REQUIRED for SearchInterface::search()
-            // This must exist in etc/search_request.xml (catalog_view_container is standard)
-            $builder->setRequestName('catalog_view_container');
-
             // Pagination
             $builder->setPageSize($productLimit);
             $builder->setCurrentPage(1);
@@ -190,7 +186,10 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
                 $builder->addFilter($segmentFilter);
             }
 
+            // Create criteria and set request name HERE
             $searchCriteria = $builder->create();
+            // This request name must exist in etc/search_request.xml
+            $searchCriteria->setRequestName('catalog_view_container');
 
             $searchResult  = $this->search->search($searchCriteria);
             $totalRecords  = $searchResult->getTotalCount();
@@ -237,9 +236,6 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         try {
             $builder = $this->searchCriteriaBuilderFactory->create();
 
-            // Request name for this search too
-            $builder->setRequestName('catalog_view_container');
-
             // Filter: isNew = Yes
             $isNewFilter = $this->filterBuilder
                 ->setField(self::IS_NEW)
@@ -258,11 +254,12 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
                 $builder->addFilter($segmentFilter);
             }
 
-            // Optional adapter-level pagination:
+            // Optional: adapter-level pagination
             // $builder->setPageSize($this->pageSize);
             // $builder->setCurrentPage($page ?: 1);
 
             $searchCriteria = $builder->create();
+            $searchCriteria->setRequestName('catalog_view_container');
 
             $searchResult = $this->search->search($searchCriteria);
             $items        = $searchResult->getItems();
