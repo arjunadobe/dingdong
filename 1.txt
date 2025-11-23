@@ -3,6 +3,9 @@
 namespace Lotus\Catalog\Model\Product;
 
 use Lotus\Catalog\Api\Product\WhatsNewInterface;
+use Magento\Framework\Api\Search\SearchCriteriaBuilder;
+use Magento\Framework\Api\FilterBuilder;
+use Magento\Framework\Api\Search\FilterGroupBuilder;
 
 class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNewInterface
 {
@@ -54,14 +57,19 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
     protected $productVisibility;
 
     /**
-     * @var \Magento\Framework\Api\Search\SearchCriteriaBuilder
+     * @var SearchCriteriaBuilder
      */
     protected $searchCriteriaBuilder;
 
     /**
-     * @var \Magento\Framework\Api\FilterBuilder
+     * @var FilterBuilder
      */
     protected $filterBuilder;
+
+    /**
+     * @var FilterGroupBuilder
+     */
+    protected $filterGroupBuilder;
 
     /**
      * @param \Magento\Catalog\Model\Entity\Attribute $attribute
@@ -77,10 +85,11 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      * @param \Magento\Framework\Search\Adapter\Mysql\TemporaryStorageFactory $temporaryStorageFactory
      * @param \Magento\Catalog\Model\Layer\Resolver $layerResolver
      * @param \Magento\Catalog\Model\Product $product
-     * @param \Magento\Framework\Api\Search\SearchCriteriaBuilder $searchCriteriaBuilder
+     * @param SearchCriteriaBuilder $searchCriteriaBuilder
      * @param \Magento\Search\Api\SearchInterface $search
-     * @param \Magento\Framework\Api\FilterBuilder $filterBuilder
+     * @param FilterBuilder $filterBuilder
      * @param \Magento\Catalog\Model\Config $catalogConfig
+     * @param FilterGroupBuilder $filterGroupBuilder
      */
     public function __construct(
         \Magento\Catalog\Model\Entity\Attribute $attribute,
@@ -96,10 +105,11 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         \Magento\Framework\Search\Adapter\Mysql\TemporaryStorageFactory $temporaryStorageFactory,
         \Magento\Catalog\Model\Layer\Resolver $layerResolver,
         \Magento\Catalog\Model\Product $product,
-        \Magento\Framework\Api\Search\SearchCriteriaBuilder $searchCriteriaBuilder,
+        SearchCriteriaBuilder $searchCriteriaBuilder,
         \Magento\Search\Api\SearchInterface $search,
-        \Magento\Framework\Api\FilterBuilder $filterBuilder,
-        \Magento\Catalog\Model\Config $catalogConfig
+        FilterBuilder $filterBuilder,
+        \Magento\Catalog\Model\Config $catalogConfig,
+        FilterGroupBuilder $filterGroupBuilder = null
     ) {
         $this->productLinkFactory   = $productLinkFactory;
         $this->offerCollection      = $offerCollection;
@@ -111,6 +121,8 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         $this->_scopeConfig         = $scopeConfig;
         $this->searchCriteriaBuilder = $searchCriteriaBuilder;
         $this->filterBuilder        = $filterBuilder;
+        $this->filterGroupBuilder   = $filterGroupBuilder ?: \Magento\Framework\App\ObjectManager::getInstance()
+            ->get(FilterGroupBuilder::class);
 
         parent::__construct(
             $attribute,
@@ -153,7 +165,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         }
 
         try {
-            // Build a valid SearchCriteria with at least one filter
+            // Build a valid SearchCriteria with proper filter groups
             $searchCriteria = $this->buildWhatsNewSearchCriteria($storeId, $optionId, $productLimit);
 
             $searchResult  = $this->search->search($searchCriteria);
@@ -251,39 +263,120 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      */
     protected function buildWhatsNewSearchCriteria($storeId, $isNewOptionId, $pageSize = null)
     {
-        // Reset builder to avoid carrying filters/page data between calls
-        $this->searchCriteriaBuilder->setFilterGroups([]);
-        $this->searchCriteriaBuilder->setPageSize(null);
+        // Create filter groups properly
+        $filterGroups = [];
+
+        // Filter: is_new = "Yes" option
+        $isNewFilter = $this->filterBuilder
+            ->setField(self::IS_NEW)
+            ->setValue($isNewOptionId)
+            ->setConditionType('eq')
+            ->create();
+
+        $filterGroup1 = $this->filterGroupBuilder
+            ->addFilter($isNewFilter)
+            ->create();
+        $filterGroups[] = $filterGroup1;
+
+        // Only enabled products
+        $statusFilter = $this->filterBuilder
+            ->setField('status')
+            ->setValue($this->productStatus->getVisibleStatusIds())
+            ->setConditionType('in')
+            ->create();
+
+        $filterGroup2 = $this->filterGroupBuilder
+            ->addFilter($statusFilter)
+            ->create();
+        $filterGroups[] = $filterGroup2;
+
+        // Only catalog-visible products
+        $visibilityFilter = $this->filterBuilder
+            ->setField('visibility')
+            ->setValue($this->productVisibility->getVisibleInCatalogIds())
+            ->setConditionType('in')
+            ->create();
+
+        $filterGroup3 = $this->filterGroupBuilder
+            ->addFilter($visibilityFilter)
+            ->create();
+        $filterGroups[] = $filterGroup3;
+
+        // Build search criteria with filter groups
+        $searchCriteria = $this->searchCriteriaBuilder
+            ->setFilterGroups($filterGroups)
+            ->setCurrentPage(1);
+
+        if ($pageSize) {
+            $searchCriteria->setPageSize($pageSize);
+        }
+
+        return $searchCriteria->create();
+    }
+
+    /**
+     * Alternative method using addFilters method (if available in your Magento version)
+     *
+     * @param int $storeId
+     * @param int $isNewOptionId
+     * @param int|null $pageSize
+     * @return \Magento\Framework\Api\Search\SearchCriteria
+     */
+    protected function buildWhatsNewSearchCriteriaAlternative($storeId, $isNewOptionId, $pageSize = null)
+    {
+        $this->searchCriteriaBuilder->addFilters([
+            $this->filterBuilder
+                ->setField(self::IS_NEW)
+                ->setValue($isNewOptionId)
+                ->setConditionType('eq')
+                ->create()
+        ]);
+
+        $this->searchCriteriaBuilder->addFilters([
+            $this->filterBuilder
+                ->setField('status')
+                ->setValue($this->productStatus->getVisibleStatusIds())
+                ->setConditionType('in')
+                ->create()
+        ]);
+
+        $this->searchCriteriaBuilder->addFilters([
+            $this->filterBuilder
+                ->setField('visibility')
+                ->setValue($this->productVisibility->getVisibleInCatalogIds())
+                ->setConditionType('in')
+                ->create()
+        ]);
+
         $this->searchCriteriaBuilder->setCurrentPage(1);
 
         if ($pageSize) {
             $this->searchCriteriaBuilder->setPageSize($pageSize);
         }
 
-        // Filter: is_new = "Yes" option
-        $this->searchCriteriaBuilder->addFilter(
-            self::IS_NEW,
-            $isNewOptionId,
-            'eq'
-        );
-
-        // Only enabled products
-        $this->searchCriteriaBuilder->addFilter(
-            'status',
-            $this->productStatus->getVisibleStatusIds(),
-            'in'
-        );
-
-        // Only catalog-visible products
-        $this->searchCriteriaBuilder->addFilter(
-            'visibility',
-            $this->productVisibility->getVisibleInCatalogIds(),
-            'in'
-        );
-
-        // Optional: restrict to store (if needed / if attribute exists)
-        // $this->searchCriteriaBuilder->addFilter('store_id', $storeId, 'eq');
-
         return $this->searchCriteriaBuilder->create();
+    }
+
+    /**
+     * Fallback method using direct product collection if search continues to fail
+     *
+     * @param int $storeId
+     * @param int $isNewOptionId
+     * @param int|null $limit
+     * @return \Magento\Catalog\Model\ResourceModel\Product\Collection
+     */
+    protected function getProductsFallback($storeId, $isNewOptionId, $limit = null)
+    {
+        $collection = $this->productCollectionFactory->create();
+        $collection->addStoreFilter($storeId);
+        $collection->addAttributeToFilter(self::IS_NEW, $isNewOptionId);
+        $collection->addAttributeToFilter('status', ['in' => $this->productStatus->getVisibleStatusIds()]);
+        $collection->addAttributeToFilter('visibility', ['in' => $this->productVisibility->getVisibleInCatalogIds()]);
+        
+        if ($limit) {
+            $collection->setPageSize($limit);
+        }
+
+        return $collection;
     }
 }
