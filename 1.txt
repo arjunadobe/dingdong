@@ -192,20 +192,7 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
             return $links;
         } catch (\Exception $e) {
             // Fallback to direct collection if search fails
-            $collection = $this->getProductsFallback($storeId, $optionId, $productLimit);
-            $collection->addAttributeToSort(self::WHATS_NEW_RANK, self::ASC)
-                ->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => '']);
-
-            $productData = $this->getProductData($collection, $storeId, $segmentId);
-
-            $link = $this->productLinkFactory->create();
-            $link->setProducts($productData)
-                ->setCount($collection->getSize());
-
-            $links   = [];
-            $links[] = $link;
-
-            return $links;
+            return $this->getProductsFallbackResponse($storeId, $optionId, $productLimit, $segmentId);
         }
     }
 
@@ -262,31 +249,12 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
             return $this->formatedOutput($productCollection, $storeId, $searchResult, $segmentId);
         } catch (\Exception $e) {
             // Fallback to direct collection if search fails
-            $collection = $this->getProductsFallback($storeId, $optionId);
-            $collection->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => '']);
-
-            $this->getSortedProductCollection(
-                $collection,
-                $sort,
-                $direction,
-                $dir,
-                self::WHATS_NEW_RANK
-            );
-
-            // Apply pagination manually
-            if ($page) {
-                $collection->setCurPage($page);
-            }
-
-            return $this->formatedOutputFallback($collection, $storeId, $segmentId);
+            return $this->getAllProductsFallbackResponse($storeId, $optionId, $segmentId, $sort, $direction, $dir, $page);
         }
     }
 
     /**
-     * Build SearchCriteria for "What's New" products.
-     *
-     * Ensures we always have at least one filter so the search layer
-     * doesn't throw "The request query and filters aren't set".
+     * Build SearchCriteria for "What's New" products using the CORRECT approach
      *
      * @param int $storeId
      * @param int $isNewOptionId
@@ -295,97 +263,33 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
      */
     protected function buildWhatsNewSearchCriteria($storeId, $isNewOptionId, $pageSize = null)
     {
-        // Create filter groups properly
-        $filterGroups = [];
-
-        // Filter: is_new = "Yes" option
+        // Create individual filters
         $isNewFilter = $this->filterBuilder
             ->setField(self::IS_NEW)
             ->setValue($isNewOptionId)
             ->setConditionType('eq')
             ->create();
 
-        $filterGroup1 = $this->filterGroupBuilder
-            ->addFilter($isNewFilter)
-            ->create();
-        $filterGroups[] = $filterGroup1;
-
-        // Only enabled products
         $statusFilter = $this->filterBuilder
             ->setField('status')
             ->setValue($this->productStatus->getVisibleStatusIds())
             ->setConditionType('in')
             ->create();
 
-        $filterGroup2 = $this->filterGroupBuilder
-            ->addFilter($statusFilter)
-            ->create();
-        $filterGroups[] = $filterGroup2;
-
-        // Only catalog-visible products
         $visibilityFilter = $this->filterBuilder
             ->setField('visibility')
             ->setValue($this->productVisibility->getVisibleInCatalogIds())
             ->setConditionType('in')
             ->create();
 
-        $filterGroup3 = $this->filterGroupBuilder
-            ->addFilter($visibilityFilter)
-            ->create();
-        $filterGroups[] = $filterGroup3;
+        // Add filters to search criteria builder - CORRECT METHOD
+        $this->searchCriteriaBuilder->addFilter($isNewFilter);
+        $this->searchCriteriaBuilder->addFilter($statusFilter);
+        $this->searchCriteriaBuilder->addFilter($visibilityFilter);
 
-        // Build search criteria with filter groups
-        $searchCriteria = $this->searchCriteriaBuilder
-            ->setFilterGroups($filterGroups)
-            ->setCurrentPage(1);
-
-        if ($pageSize) {
-            $searchCriteria->setPageSize($pageSize);
-        }
-
-        return $searchCriteria->create();
-    }
-
-    /**
-     * Alternative method using addFilter method (correct method name)
-     *
-     * @param int $storeId
-     * @param int $isNewOptionId
-     * @param int|null $pageSize
-     * @return \Magento\Framework\Api\Search\SearchCriteria
-     */
-    protected function buildWhatsNewSearchCriteriaAlternative($storeId, $isNewOptionId, $pageSize = null)
-    {
-        // Reset the builder
-        $this->searchCriteriaBuilder->setFilterGroups([]);
-        
-        // Use addFilter (singular) instead of addFilters (plural)
-        $this->searchCriteriaBuilder->addFilter(
-            $this->filterBuilder
-                ->setField(self::IS_NEW)
-                ->setValue($isNewOptionId)
-                ->setConditionType('eq')
-                ->create()
-        );
-
-        $this->searchCriteriaBuilder->addFilter(
-            $this->filterBuilder
-                ->setField('status')
-                ->setValue($this->productStatus->getVisibleStatusIds())
-                ->setConditionType('in')
-                ->create()
-        );
-
-        $this->searchCriteriaBuilder->addFilter(
-            $this->filterBuilder
-                ->setField('visibility')
-                ->setValue($this->productVisibility->getVisibleInCatalogIds())
-                ->setConditionType('in')
-                ->create()
-        );
-
+        // Set pagination
         $this->searchCriteriaBuilder->setCurrentPage(1);
-
+        
         if ($pageSize) {
             $this->searchCriteriaBuilder->setPageSize($pageSize);
         }
@@ -394,54 +298,51 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
     }
 
     /**
-     * Simple method using manual FilterGroup creation
+     * Alternative method using filter groups manually
      *
      * @param int $storeId
      * @param int $isNewOptionId
      * @param int|null $pageSize
      * @return \Magento\Framework\Api\Search\SearchCriteria
      */
-    protected function buildWhatsNewSearchCriteriaSimple($storeId, $isNewOptionId, $pageSize = null)
+    protected function buildWhatsNewSearchCriteriaWithFilterGroups($storeId, $isNewOptionId, $pageSize = null)
     {
-        $filters = [];
-        
-        // Filter: is_new = "Yes" option
-        $filters[] = $this->filterBuilder
+        // Create filters
+        $isNewFilter = $this->filterBuilder
             ->setField(self::IS_NEW)
             ->setValue($isNewOptionId)
             ->setConditionType('eq')
             ->create();
 
-        // Only enabled products
-        $filters[] = $this->filterBuilder
+        $statusFilter = $this->filterBuilder
             ->setField('status')
             ->setValue($this->productStatus->getVisibleStatusIds())
             ->setConditionType('in')
             ->create();
 
-        // Only catalog-visible products
-        $filters[] = $this->filterBuilder
+        $visibilityFilter = $this->filterBuilder
             ->setField('visibility')
             ->setValue($this->productVisibility->getVisibleInCatalogIds())
             ->setConditionType('in')
             ->create();
 
-        // Create filter group
-        $filterGroup = $this->filterGroupBuilder->setFilters($filters)->create();
+        // Create filter group and add all filters to it
+        $filterGroup = $this->filterGroupBuilder->setFilters([$isNewFilter, $statusFilter, $visibilityFilter])->create();
 
-        // Build search criteria
-        $this->searchCriteriaBuilder->setFilterGroups([$filterGroup]);
-        $this->searchCriteriaBuilder->setCurrentPage(1);
-
+        // Create a new search criteria and set the filter group
+        $searchCriteria = $this->searchCriteriaBuilder->create();
+        $searchCriteria->setFilterGroups([$filterGroup]);
+        $searchCriteria->setCurrentPage(1);
+        
         if ($pageSize) {
-            $this->searchCriteriaBuilder->setPageSize($pageSize);
+            $searchCriteria->setPageSize($pageSize);
         }
 
-        return $this->searchCriteriaBuilder->create();
+        return $searchCriteria;
     }
 
     /**
-     * Fallback method using direct product collection if search continues to fail
+     * Fallback method using direct product collection
      *
      * @param int $storeId
      * @param int $isNewOptionId
@@ -462,6 +363,64 @@ class WhatsNewList extends \Lotus\Catalog\Model\AbstractModel implements WhatsNe
         }
 
         return $collection;
+    }
+
+    /**
+     * Get fallback response for getNewProducts
+     *
+     * @param int $storeId
+     * @param int $optionId
+     * @param int $limit
+     * @param string $segmentId
+     * @return array
+     */
+    protected function getProductsFallbackResponse($storeId, $optionId, $limit, $segmentId)
+    {
+        $collection = $this->getProductsFallback($storeId, $optionId, $limit);
+        $collection->addAttributeToSort(self::WHATS_NEW_RANK, self::ASC)
+            ->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => '']);
+
+        $productData = $this->getProductData($collection, $storeId, $segmentId);
+
+        $link = $this->productLinkFactory->create();
+        $link->setProducts($productData)
+            ->setCount($collection->getSize());
+
+        return [$link];
+    }
+
+    /**
+     * Get fallback response for getAllNewProducts
+     *
+     * @param int $storeId
+     * @param int $optionId
+     * @param string $segmentId
+     * @param string|null $sort
+     * @param string|null $direction
+     * @param string|null $dir
+     * @param int|null $page
+     * @return array
+     */
+    protected function getAllProductsFallbackResponse($storeId, $optionId, $segmentId, $sort, $direction, $dir, $page)
+    {
+        $collection = $this->getProductsFallback($storeId, $optionId);
+        $collection->addAttributeToFilter(self::WHATS_NEW_RANK, ['neq' => '']);
+
+        $this->getSortedProductCollection(
+            $collection,
+            $sort,
+            $direction,
+            $dir,
+            self::WHATS_NEW_RANK
+        );
+
+        // Apply pagination manually
+        if ($page) {
+            $collection->setCurPage($page);
+            $collection->setPageSize($this->pageSize);
+        }
+
+        return $this->formatedOutputFallback($collection, $storeId, $segmentId);
     }
 
     /**
