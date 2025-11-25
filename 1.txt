@@ -1,8 +1,15 @@
 <?xml version="1.0"?>
-<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Module/etc/module.xsd">
-    <module name="Lotus_TranslationFixer">
-        <sequence>
-            <module name="Magento_Translation"/>
-        </sequence>
-    </module>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+    <type name="Magento\Framework\Console\CommandList">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="translationFilesCreate" xsi:type="object">Lotus\TranslationFixer\Console\Command\CreateTranslationFilesCommand</item>
+            </argument>
+        </arguments>
+    </type>
+
+    <!-- Plugin to create translation files when accessing frontend/adminhtml -->
+    <type name="Magento\Framework\App\FrontControllerInterface">
+        <plugin name="lotus_translation_fixer_create_files" type="Lotus\TranslationFixer\Plugin\CreateTranslationFilesOnFrontendPlugin" sortOrder="10"/>
+    </type>
 </config>
