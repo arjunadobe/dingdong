@@ -1,8 +1,325 @@
 <?php
-use Magento\Framework\Component\ComponentRegistrar;
+namespace Lotus\TranslationFixer\Service;
 
-ComponentRegistrar::register(
-    ComponentRegistrar::MODULE,
-    'Lotus_TranslationFixer',
-    __DIR__
-);
+use Magento\Framework\Exception\LocalizedException;
+use Magento\Framework\Filesystem\Driver\File;
+use Magento\Framework\View\Design\ThemeInterface;
+use Magento\Framework\View\DesignInterface;
+use Magento\Store\Model\App\Emulation;
+use Magento\Theme\Model\ResourceModel\Theme\CollectionFactory as ThemeCollectionFactory;
+use Magento\Translation\Model\Js\DataProvider;
+
+class TranslationFileCreator
+{
+    private const AREAS = ['frontend', 'adminhtml'];
+    private const LOCALES = ['en_US'];
+
+    /**
+     * @param Emulation $emulation
+     * @param DataProvider $dataProvider
+     * @param DesignInterface $design
+     * @param File $file
+     * @param ThemeCollectionFactory $themeCollectionFactory
+     */
+    public function __construct(
+        private readonly Emulation $emulation,
+        private readonly DataProvider $dataProvider,
+        private readonly DesignInterface $design,
+        private readonly File $file,
+        private readonly ThemeCollectionFactory $themeCollectionFactory
+    ) {}
+
+    /**
+     * Create translation files for all areas and themes
+     *
+     * @param callable|null $progressCallback Optional callback for progress updates
+     * @return int Number of files created
+     */
+    public function createAllTranslationFiles(?callable $progressCallback = null): int
+    {
+        $created = 0;
+        $themeCollection = $this->themeCollectionFactory->create();
+        $themeCollection->addFieldToFilter('type', ThemeInterface::TYPE_PHYSICAL);
+        $themes = $themeCollection->load();
+
+        foreach (self::AREAS as $area) {
+            if ($progressCallback) {
+                $progressCallback("Processing area: {$area}");
+            }
+
+            foreach ($themes as $theme) {
+                if ($theme->getArea() !== $area) {
+                    continue;
+                }
+
+                if ($progressCallback) {
+                    $progressCallback("  Processing theme: {$theme->getName()} ({$theme->getThemePath()})");
+                }
+
+                $created += $this->createTranslationFilesForTheme($area, $theme, $progressCallback);
+            }
+        }
+
+        return $created;
+    }
+
+    /**
+     * Create translation files for a specific theme
+     *
+     * @param string $area
+     * @param ThemeInterface $theme
+     * @param callable|null $progressCallback
+     * @return int Number of files created
+     */
+    public function createTranslationFilesForTheme(
+        string $area,
+        ThemeInterface $theme,
+        ?callable $progressCallback = null
+    ): int {
+        $created = 0;
+
+        foreach (self::LOCALES as $locale) {
+            $this->emulation->startEnvironmentEmulation(0, $area, true);
+
+            try {
+                $this->design->setDesignTheme($theme);
+                $themePath = $theme->getThemePath();
+
+                if ($this->createJsTranslationFile($area, $themePath, $locale)) {
+                    if ($progressCallback) {
+                        $progressCallback("    Created: js-translation.json");
+                    }
+                    $created++;
+                }
+
+                if ($this->createMageDictionaryFile($area, $themePath, $locale)) {
+                    if ($progressCallback) {
+                        $progressCallback("    Created: js-translation.json");
+                    }
+                    $created++;
+                }
+
+                if ($this->createMageTranslationDictionaryFile($area, $themePath, $locale)) {
+                    if ($progressCallback) {
+                        $progressCallback("    Created: mage-translation-dictionary.js");
+                    }
+                    $created++;
+                }
+            } catch (\Exception $e) {
+                if ($progressCallback) {
+                    $progressCallback("    Error: {$e->getMessage()}");
+                }
+            } finally {
+                $this->emulation->stopEnvironmentEmulation();
+            }
+        }
+
+        return $created;
+    }
+
+    /**
+     * Check if translation files exist for current theme in specified area
+     *
+     * @param string $area
+     * @return bool
+     */
+    public function translationFilesExist(string $area): bool
+    {
+        $locale = self::LOCALES[0];
+
+        $this->emulation->startEnvironmentEmulation(null, $area);
+
+        try {
+            $theme = $this->design->getDesignTheme();
+            $themePath = $theme->getThemePath();
+
+            $jsTranslationPath = $this->getJsTranslationPath($area, $themePath, $locale);
+            $mageTranslatePath = $this->getMageTranslationPath($area, $themePath, $locale);
+            $mageDictionaryPath = $this->getDictionaryPath($area, $themePath, $locale);
+
+            return $this->file->isExists($jsTranslationPath) && $this->file->isExists($mageTranslatePath) && $this->file->isExists($mageDictionaryPath);
+        } finally {
+            $this->emulation->stopEnvironmentEmulation();
+        }
+    }
+
+    /**
+     * Create translation files for the current theme in specified area
+     *
+     * @param string $area
+     * @return int Number of files created
+     */
+    public function createTranslationFilesForCurrentTheme(string $area): int
+    {
+        $created = 0;
+
+        $this->emulation->startEnvironmentEmulation(null, $area);
+
+        try {
+            $theme = $this->design->getDesignTheme();
+            $themePath = $theme->getThemePath();
+            $locale = self::LOCALES[0];
+
+            if ($this->createJsTranslationFile($area, $themePath, $locale)) {
+                $created++;
+            }
+
+            if ($this->createMageTranslationDictionaryFile($area, $themePath, $locale)) {
+                $created++;
+            }
+        } catch (\Exception $e) {
+            // Silent fail - don't break the site
+        } finally {
+            $this->emulation->stopEnvironmentEmulation();
+        }
+
+        return $created;
+    }
+
+    /**
+     * Create js-translation.json file
+     *
+     * @param string $area
+     * @param string $themePath
+     * @param string $locale
+     * @return bool True if file was created, false if already exists
+     */
+    private function createJsTranslationFile(string $area, string $themePath, string $locale): bool
+    {
+        $filePath = $this->getJsTranslationPath($area, $themePath, $locale);
+
+        if ($this->file->isExists($filePath)) {
+            return false;
+        }
+
+        $directory = dirname($filePath);
+        if (!$this->file->isExists($directory)) {
+            $this->file->createDirectory($directory, 0755);
+        }
+
+        try {
+            $translationData = $this->dataProvider->getData($themePath);
+        } catch (\Exception $e) {
+            $translationData = [];
+        }
+
+        $this->file->filePutContents(
+            $filePath,
+            json_encode($translationData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
+        );
+
+        return true;
+    }
+
+    /**
+     * Create mage-translation-dictionary.js file
+     *
+     * @param string $area
+     * @param string $themePath
+     * @param string $locale
+     * @return bool True if file was created, false if already exists
+     */
+    private function createMageTranslationDictionaryFile(string $area, string $themePath, string $locale): bool
+    {
+        $filePath = $this->getMageTranslationPath($area, $themePath, $locale);
+
+        if ($this->file->isExists($filePath)) {
+            return false;
+        }
+
+        $directory = dirname($filePath);
+        if (!$this->file->isExists($directory)) {
+            $this->file->createDirectory($directory, 0755);
+        }
+
+        $jsContent = <<<'JS'
+define([
+    'text!js-translation.json'
+], function (dict) {
+    'use strict';
+
+    return JSON.parse(dict);
+});
+JS;
+
+        $this->file->filePutContents($filePath, $jsContent);
+
+        return true;
+    }
+
+    /**
+     * Create mage-translation-dictionary.js file
+     *
+     * @param string $area
+     * @param string $themePath
+     * @param string $locale
+     * @return bool True if file was created, false if already exists
+     */
+    private function createMageDictionaryFile(string $area, string $themePath, string $locale): bool
+    {
+        $filePath = $this->getDictionaryPath($area, $themePath, $locale);
+
+        if ($this->file->isExists($filePath)) {
+            return false;
+        }
+
+        $directory = dirname($filePath);
+        if (!$this->file->isExists($directory)) {
+            $this->file->createDirectory($directory, 0755);
+        }
+
+        $jsContent = <<<'JS'
+define([
+    'text!js-translation.json'
+], function (dict) {
+    'use strict';
+
+    return JSON.parse(dict);
+});
+JS;
+
+        $this->file->filePutContents($filePath, $jsContent);
+
+        return true;
+    }
+
+
+    /**
+     * Get path to js-translation.json file
+     *
+     * @param string $area
+     * @param string $themePath
+     * @param string $locale
+     * @return string
+     */
+    private function getDictionaryPath(string $area, string $themePath, string $locale): string
+    {
+        return BP . "/pub/static/{$area}/{$themePath}/{$locale}/mageTranslationDictionary.js";
+    }
+
+    /**
+     * Get path to js-translation.json file
+     *
+     * @param string $area
+     * @param string $themePath
+     * @param string $locale
+     * @return string
+     */
+    private function getJsTranslationPath(string $area, string $themePath, string $locale): string
+    {
+        return BP . "/pub/static/{$area}/{$themePath}/{$locale}/js-translation2.json";
+    }
+
+    /**
+     * Get path to mage-translation-dictionary.js file
+     *
+     * @param string $area
+     * @param string $themePath
+     * @param string $locale
+     * @return string
+     */
+    private function getMageTranslationPath(string $area, string $themePath, string $locale): string
+    {
+        return BP . "/pub/static/{$area}/{$themePath}/{$locale}/Magento_Translation/js/mage-translation-dictionary2.js";
+    }
+}
