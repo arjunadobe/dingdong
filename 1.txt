@@ -1,15 +1,71 @@
-<?xml version="1.0"?>
-<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
-    <type name="Magento\Framework\Console\CommandList">
-        <arguments>
-            <argument name="commands" xsi:type="array">
-                <item name="translationFilesCreate" xsi:type="object">Lotus\TranslationFixer\Console\Command\CreateTranslationFilesCommand</item>
-            </argument>
-        </arguments>
-    </type>
+<?php
+namespace Lotus\TranslationFixer\Console\Command;
 
-    <!-- Plugin to create translation files when accessing frontend/adminhtml -->
-    <type name="Magento\Framework\App\FrontControllerInterface">
-        <plugin name="lotus_translation_fixer_create_files" type="Lotus\TranslationFixer\Plugin\CreateTranslationFilesOnFrontendPlugin" sortOrder="10"/>
-    </type>
-</config>
+use Lotus\TranslationFixer\Service\TranslationFileCreator;
+use Magento\Framework\App\State;
+use Magento\Framework\Console\Cli;
+use Magento\Framework\Exception\LocalizedException;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Output\OutputInterface;
+
+class CreateTranslationFilesCommand extends Command
+{
+    /**
+     * @param TranslationFileCreator $translationFileCreator
+     * @param State $appState
+     */
+    public function __construct(
+        private readonly TranslationFileCreator $translationFileCreator,
+        private readonly State $appState
+    ) {
+        parent::__construct();
+    }
+
+    /**
+     * @return void
+     */
+    protected function configure(): void
+    {
+        $this->setName('translation:files:create')
+            ->setDescription('Create missing translation files for all areas and themes');
+
+        parent::configure();
+    }
+
+    /**
+     * @param InputInterface $input
+     * @param OutputInterface $output
+     * @return int
+     */
+    protected function execute(InputInterface $input, OutputInterface $output): int
+    {
+        try {
+            $this->appState->setAreaCode('adminhtml');
+        } catch (LocalizedException $e) {
+            // silence error
+        }
+
+        $created = $this->translationFileCreator->createAllTranslationFiles(
+            function (string $message) use ($output) {
+                if (str_starts_with($message, 'Processing area:')) {
+                    $output->writeln("<info>{$message}</info>");
+                } elseif (str_starts_with($message, '  Processing theme:')) {
+                    $output->writeln($message);
+                } elseif (str_starts_with($message, '    Created:')) {
+                    $output->writeln("<comment>{$message}</comment>");
+                } elseif (str_starts_with($message, '    Error:')) {
+                    $output->writeln("<error>{$message}</error>");
+                }
+            }
+        );
+
+        if ($created > 0) {
+            $output->writeln("<info>Successfully created {$created} translation files</info>");
+        } else {
+            $output->writeln("<info>All translation files already exist</info>");
+        }
+
+        return Cli::RETURN_SUCCESS;
+    }
+}
