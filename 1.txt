@@ -259,6 +259,9 @@ JS;
     {
         $filePath = $this->getDictionaryPath($area, $themePath, $locale);
 
+        echo $filePath;
+        exit;
+
         if ($this->file->isExists($filePath)) {
             return false;
         }
@@ -307,7 +310,7 @@ JS;
      */
     private function getJsTranslationPath(string $area, string $themePath, string $locale): string
     {
-        return BP . "/pub/static/{$area}/{$themePath}/{$locale}/js-translation2.json";
+        return BP . "/pub/static/{$area}/{$themePath}/{$locale}/js-translation.json";
     }
 
     /**
@@ -320,6 +323,6 @@ JS;
      */
     private function getMageTranslationPath(string $area, string $themePath, string $locale): string
     {
-        return BP . "/pub/static/{$area}/{$themePath}/{$locale}/Magento_Translation/js/mage-translation-dictionary2.js";
+        return BP . "/pub/static/{$area}/{$themePath}/{$locale}/Magento_Translation/js/mage-translation-dictionary.js";
     }
 }
