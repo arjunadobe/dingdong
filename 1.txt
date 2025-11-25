@@ -1,52 +1,152 @@
 <?php
 namespace Lotus\TranslationFixer\Plugin;
 
-use Lotus\TranslationFixer\Service\TranslationFileCreator;
 use Magento\Framework\App\ResponseInterface;
 use Magento\Framework\App\State;
-use Magento\Framework\Controller\ResultInterface;
+use Magento\Framework\Filesystem\Driver\File;
+use Magento\Framework\View\DesignInterface;
+use Magento\Store\Model\App\Emulation;
+use Magento\Translation\Model\Js\DataProvider;
 
-class CreateTranslationFilesOnFrontendPlugin
+class TranslationFixerPlugin
 {
-    /**
-     * @param TranslationFileCreator $translationFileCreator
-     * @param State $appState
-     */
+    protected $state;
+    protected $emulation;
+    protected $dataProvider;
+    protected $design;
+    protected $file;
+    protected $processed = false;
+
     public function __construct(
-        private readonly TranslationFileCreator $translationFileCreator,
-        private readonly State $appState
+        State $state,
+        Emulation $emulation,
+        DataProvider $dataProvider,
+        DesignInterface $design,
+        File $file
     ) {
+        $this->state = $state;
+        $this->emulation = $emulation;
+        $this->dataProvider = $dataProvider;
+        $this->design = $design;
+        $this->file = $file;
     }
 
     /**
-     * Create translation files after front controller dispatch
-     *
-     * @param \Magento\Framework\App\FrontControllerInterface $subject
-     * @param ResponseInterface|ResultInterface $result
-     * @return ResponseInterface|ResultInterface
+     * @param \Magento\Framework\App\Http $subject
+     * @param ResponseInterface $result
+     * @return ResponseInterface
      */
-    public function afterDispatch(\Magento\Framework\App\FrontControllerInterface $subject, ResponseInterface|ResultInterface $result): ResponseInterface|ResultInterface
+    public function afterLaunch(\Magento\Framework\App\Http $subject, ResponseInterface $result)
     {
-        // Only run in developer mode to avoid performance impact in production
+
         try {
-            if ($this->appState->getMode() !== State::MODE_DEVELOPER) {
+            if ($this->state->getMode() !== State::MODE_DEVELOPER) {
                 return $result;
             }
-
-            $areaCode = $this->appState->getAreaCode();
-
-            // Only check for frontend and adminhtml areas
-            if (in_array($areaCode, ['frontend', 'adminhtml'])) {
-                // Check if translation files exist for the current area
-                if (!$this->translationFileCreator->translationFilesExist($areaCode)) {
-                    // Create translation files for the current theme in the current area
-                    $this->translationFileCreator->createTranslationFilesForCurrentTheme($areaCode);
-                }
-            }
         } catch (\Exception $e) {
-            // Silent fail - don't break the site if translation files can't be created
+            // If we can't determine the mode, don't run
+            return $result;
         }
 
+        $this->checkAndCreateTranslationFiles();
+
         return $result;
+    }
+
+    protected function checkAndCreateTranslationFiles()
+    {
+        $areas = ['frontend', 'adminhtml'];
+
+        foreach ($areas as $area) {
+            if (!$this->areTranslationFilesExist($area)) {
+                $this->createTranslationFilesForArea($area);
+            }
+        }
+    }
+
+    protected function areTranslationFilesExist($area)
+    {
+        $locale = 'en_US';
+        // Emulate the area to get the correct theme
+        $this->emulation->startEnvironmentEmulation(null, $area);
+        $theme = $this->design->getDesignTheme();
+        $themePath = $theme->getThemePath();
+        $this->emulation->stopEnvironmentEmulation();
+
+        $jsTranslationPath = BP . "/pub/static/{$area}/{$themePath}/{$locale}/js-translation.json";
+        $mageTranslatePath = BP . "/pub/static/{$area}/{$themePath}/{$locale}/Magento_Translate/js/mage-translation-dictionary.js";
+
+        // Quick file existence check - this is very fast
+        return $this->file->isExists($jsTranslationPath) && $this->file->isExists($mageTranslatePath);
+    }
+
+    protected function createTranslationFilesForArea($area)
+    {
+        // Start environment emulation for the area
+        $this->emulation->startEnvironmentEmulation(null, $area);
+
+        try {
+            $theme = $this->design->getDesignTheme();
+            $themePath = $theme->getThemePath();
+            $locale = 'en_US';
+
+            // Create js-translation.json
+            $this->createJsTranslationJson($area, $locale, $themePath);
+
+            // Create mage-translation-dictionary.js
+            $this->createMageTranslationDictionary($area, $locale, $themePath);
+        } catch (\Exception $e) {
+            // Silent fail - don't break the site if translation files can't be created
+        } finally {
+            $this->emulation->stopEnvironmentEmulation();
+        }
+    }
+
+    protected function createJsTranslationJson($area, $locale, $themePath)
+    {
+        $filePath = BP . "/pub/static/{$area}/{$themePath}/{$locale}/js-translation.json";
+
+        // Create directory if it doesn't exist
+        $directory = dirname($filePath);
+        if (!$this->file->isExists($directory)) {
+            $this->file->createDirectory($directory, 0777);
+        }
+
+        // Get translation data or create empty array
+        try {
+            $translationData = $this->dataProvider->getData($themePath);
+        } catch (\Exception $e) {
+            $translationData = [];
+        }
+
+        // Create the file only if it doesn't exist
+        if (!$this->file->isExists($filePath)) {
+            $this->file->filePutContents($filePath, json_encode($translationData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        }
+    }
+
+    protected function createMageTranslationDictionary($area, $locale, $themePath)
+    {
+        $filePath = BP . "/pub/static/{$area}/{$themePath}/{$locale}/Magento_Translate/js/mage-translation-dictionary.js";
+
+        // Create directory if it doesn't exist
+        $directory = dirname($filePath);
+        if (!$this->file->isExists($directory)) {
+            $this->file->createDirectory($directory, 0777);
+        }
+
+        // Create the file only if it doesn't exist
+        if (!$this->file->isExists($filePath)) {
+            $jsContent = <<<'JS'
+    define([
+        'text!js-translation.json'
+    ], function (dict) {
+        'use strict';
+
+        return JSON.parse(dict);
+    });
+JS;
+            $this->file->filePutContents($filePath, $jsContent);
+        }
     }
 }
