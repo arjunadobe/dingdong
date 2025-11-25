@@ -1,15 +1,12 @@
 <?php
-namespace Lotus\TranslationFixer\Console\Command;
+namespace Lotus\TranslationFixer\Plugin;
 
 use Lotus\TranslationFixer\Service\TranslationFileCreator;
+use Magento\Framework\App\ResponseInterface;
 use Magento\Framework\App\State;
-use Magento\Framework\Console\Cli;
-use Magento\Framework\Exception\LocalizedException;
-use Symfony\Component\Console\Command\Command;
-use Symfony\Component\Console\Input\InputInterface;
-use Symfony\Component\Console\Output\OutputInterface;
+use Magento\Framework\Controller\ResultInterface;
 
-class CreateTranslationFilesCommand extends Command
+class CreateTranslationFilesOnFrontendPlugin
 {
     /**
      * @param TranslationFileCreator $translationFileCreator
@@ -19,53 +16,37 @@ class CreateTranslationFilesCommand extends Command
         private readonly TranslationFileCreator $translationFileCreator,
         private readonly State $appState
     ) {
-        parent::__construct();
     }
 
     /**
-     * @return void
+     * Create translation files after front controller dispatch
+     *
+     * @param \Magento\Framework\App\FrontControllerInterface $subject
+     * @param ResponseInterface|ResultInterface $result
+     * @return ResponseInterface|ResultInterface
      */
-    protected function configure(): void
+    public function afterDispatch(\Magento\Framework\App\FrontControllerInterface $subject, ResponseInterface|ResultInterface $result): ResponseInterface|ResultInterface
     {
-        $this->setName('translation:files:create')
-            ->setDescription('Create missing translation files for all areas and themes');
-
-        parent::configure();
-    }
-
-    /**
-     * @param InputInterface $input
-     * @param OutputInterface $output
-     * @return int
-     */
-    protected function execute(InputInterface $input, OutputInterface $output): int
-    {
+        // Only run in developer mode to avoid performance impact in production
         try {
-            $this->appState->setAreaCode('adminhtml');
-        } catch (LocalizedException $e) {
-            // silence error
-        }
+            if ($this->appState->getMode() !== State::MODE_DEVELOPER) {
+                return $result;
+            }
 
-        $created = $this->translationFileCreator->createAllTranslationFiles(
-            function (string $message) use ($output) {
-                if (str_starts_with($message, 'Processing area:')) {
-                    $output->writeln("<info>{$message}</info>");
-                } elseif (str_starts_with($message, '  Processing theme:')) {
-                    $output->writeln($message);
-                } elseif (str_starts_with($message, '    Created:')) {
-                    $output->writeln("<comment>{$message}</comment>");
-                } elseif (str_starts_with($message, '    Error:')) {
-                    $output->writeln("<error>{$message}</error>");
+            $areaCode = $this->appState->getAreaCode();
+
+            // Only check for frontend and adminhtml areas
+            if (in_array($areaCode, ['frontend', 'adminhtml'])) {
+                // Check if translation files exist for the current area
+                if (!$this->translationFileCreator->translationFilesExist($areaCode)) {
+                    // Create translation files for the current theme in the current area
+                    $this->translationFileCreator->createTranslationFilesForCurrentTheme($areaCode);
                 }
             }
-        );
-
-        if ($created > 0) {
-            $output->writeln("<info>Successfully created {$created} translation files</info>");
-        } else {
-            $output->writeln("<info>All translation files already exist</info>");
+        } catch (\Exception $e) {
+            // Silent fail - don't break the site if translation files can't be created
         }
 
-        return Cli::RETURN_SUCCESS;
+        return $result;
     }
 }
