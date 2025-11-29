@@ -1,27 +1,26 @@
 #!/usr/bin/env bash
-#
-# magento-deploy.sh
-# - Asks for Developer or Production mode
-# - Sets Magento mode accordingly
-# - Runs setup:upgrade
-# - Deploys static content
-# - Fixes Magento permissions
 
-set -e  # Exit on first error
+set -e
 
 ########################################
-# CONFIG – CHANGE THESE AS NEEDED
+# CONFIG
 ########################################
-MAGENTO_DIR="/var/www/html/magento"    # Magento root
-PHP_BIN="php"                          # PHP binary (php, /usr/bin/php, etc.)
-LOCALES="en_US"                        # Static deploy locales (space-separated)
-JOBS=4                                 # Parallel jobs for static deploy
-WEB_USER="www-data"                    # Web server user
-WEB_GROUP="www-data"                   # Web server group
+MAGENTO_DIR="/data/www/html/magentolotus"
+SOURCE_CODE="/home/lotusadm/app/code"
+SOURCE_DESIGN="/home/lotusadm/app/design"
+
+TARGET_CODE="$MAGENTO_DIR/app/code"
+TARGET_DESIGN="$MAGENTO_DIR/app/design"
+
+PHP_BIN="php"
+LOCALES="en_US"
+JOBS=4
+WEB_USER="www-data"
+WEB_GROUP="www-data"
+
 ########################################
-
-cd "$MAGENTO_DIR"
-
+# ASK MODE
+########################################
 echo "============================================"
 echo "   Magento Deployment Script"
 echo "============================================"
@@ -36,14 +35,44 @@ if [ "$MODE_CHOICE" = "1" ]; then
 elif [ "$MODE_CHOICE" = "2" ]; then
     TARGET_MODE="production"
 else
-    echo "Invalid choice. Please run the script again and choose 1 or 2."
+    echo "Invalid choice. Select 1 or 2."
     exit 1
 fi
 
 echo "==> Selected mode: $TARGET_MODE"
 
 ########################################
-# 1. Set Magento Mode
+# ASK COPY/REPLACE APP/CODE & APP/DESIGN
+########################################
+echo -n "Do you want to REMOVE and COPY app/code & app/design from /home/lotusadm? [y/N]: "
+read REFRESH_CHOICE
+
+REFRESH_CHOICE_LOWER=$(echo "$REFRESH_CHOICE" | tr 'A-Z' 'a-z')
+
+########################################
+# SWITCH DIRECTORY
+########################################
+cd "$MAGENTO_DIR"
+
+########################################
+# OPTIONAL CODE/DESIGN REFRESH (BOTH MODES)
+########################################
+if [ "$REFRESH_CHOICE_LOWER" = "y" ] || [ "$REFRESH_CHOICE_LOWER" = "yes" ]; then
+    echo "==> Removing existing app/code and app/design..."
+    rm -rf "$TARGET_CODE"
+    rm -rf "$TARGET_DESIGN"
+
+    echo "==> Copying fresh app/code from $SOURCE_CODE ..."
+    cp -R "$SOURCE_CODE" "$TARGET_CODE"
+
+    echo "==> Copying fresh app/design from $SOURCE_DESIGN ..."
+    cp -R "$SOURCE_DESIGN" "$TARGET_DESIGN"
+else
+    echo "==> Skipping app/code and app/design refresh."
+fi
+
+########################################
+# SET MODE
 ########################################
 if [ "$TARGET_MODE" = "developer" ]; then
     echo "==> Setting Magento to developer mode..."
@@ -57,37 +86,39 @@ else
 fi
 
 ########################################
-# 2. Setup Upgrade
+# SETUP UPGRADE
 ########################################
 echo "==> Running setup:upgrade..."
 $PHP_BIN bin/magento setup:upgrade
 
 ########################################
-# 3. Compile & Static Content
+# COMPILATION (PRODUCTION ONLY)
 ########################################
 if [ "$TARGET_MODE" = "production" ]; then
-    echo "==> Running DI compile (production)..."
+    echo "==> Running DI compile..."
     $PHP_BIN bin/magento setup:di:compile
 fi
 
+########################################
+# STATIC CONTENT DEPLOY
+########################################
 echo "==> Deploying static content..."
 $PHP_BIN bin/magento setup:static-content:deploy -f $LOCALES --jobs=$JOBS
 
 ########################################
-# 4. Permissions
+# PERMISSIONS
 ########################################
 echo "==> Setting ownership to $WEB_USER:$WEB_GROUP ..."
 sudo chown -R $WEB_USER:$WEB_GROUP .
 
-echo "==> Applying write permissions to required directories and files..."
+echo "==> Applying write permissions..."
 find var generated vendor pub/static pub/media app/etc -type f -exec chmod u+w {} +
 find var generated vendor pub/static pub/media app/etc -type d -exec chmod u+w {} +
 
-echo "==> Ensuring bin/magento is executable..."
 chmod u+x bin/magento
 
 ########################################
-# 5. Cache & Maintenance
+# CACHE + MAINTENANCE
 ########################################
 echo "==> Flushing cache..."
 $PHP_BIN bin/magento cache:flush
@@ -98,5 +129,5 @@ if [ "$TARGET_MODE" = "production" ]; then
 fi
 
 echo "============================================"
-echo " Deployment finished in $TARGET_MODE mode."
+echo " Deployment completed in $TARGET_MODE mode."
 echo "============================================"
