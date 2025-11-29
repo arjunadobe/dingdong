@@ -1,328 +1,102 @@
-<?php
-namespace Lotus\TranslationFixer\Service;
+#!/usr/bin/env bash
+#
+# magento-deploy.sh
+# - Asks for Developer or Production mode
+# - Sets Magento mode accordingly
+# - Runs setup:upgrade
+# - Deploys static content
+# - Fixes Magento permissions
 
-use Magento\Framework\Exception\LocalizedException;
-use Magento\Framework\Filesystem\Driver\File;
-use Magento\Framework\View\Design\ThemeInterface;
-use Magento\Framework\View\DesignInterface;
-use Magento\Store\Model\App\Emulation;
-use Magento\Theme\Model\ResourceModel\Theme\CollectionFactory as ThemeCollectionFactory;
-use Magento\Translation\Model\Js\DataProvider;
+set -e  # Exit on first error
 
-class TranslationFileCreator
-{
-    private const AREAS = ['frontend', 'adminhtml'];
-    private const LOCALES = ['en_US'];
+########################################
+# CONFIG – CHANGE THESE AS NEEDED
+########################################
+MAGENTO_DIR="/var/www/html/magento"    # Magento root
+PHP_BIN="php"                          # PHP binary (php, /usr/bin/php, etc.)
+LOCALES="en_US"                        # Static deploy locales (space-separated)
+JOBS=4                                 # Parallel jobs for static deploy
+WEB_USER="www-data"                    # Web server user
+WEB_GROUP="www-data"                   # Web server group
+########################################
 
-    /**
-     * @param Emulation $emulation
-     * @param DataProvider $dataProvider
-     * @param DesignInterface $design
-     * @param File $file
-     * @param ThemeCollectionFactory $themeCollectionFactory
-     */
-    public function __construct(
-        private readonly Emulation $emulation,
-        private readonly DataProvider $dataProvider,
-        private readonly DesignInterface $design,
-        private readonly File $file,
-        private readonly ThemeCollectionFactory $themeCollectionFactory
-    ) {}
+cd "$MAGENTO_DIR"
 
-    /**
-     * Create translation files for all areas and themes
-     *
-     * @param callable|null $progressCallback Optional callback for progress updates
-     * @return int Number of files created
-     */
-    public function createAllTranslationFiles(?callable $progressCallback = null): int
-    {
-        $created = 0;
-        $themeCollection = $this->themeCollectionFactory->create();
-        $themeCollection->addFieldToFilter('type', ThemeInterface::TYPE_PHYSICAL);
-        $themes = $themeCollection->load();
+echo "============================================"
+echo "   Magento Deployment Script"
+echo "============================================"
+echo "Choose Magento mode:"
+echo "  1) Developer"
+echo "  2) Production"
+echo -n "Enter choice [1-2]: "
+read MODE_CHOICE
 
-        foreach (self::AREAS as $area) {
-            if ($progressCallback) {
-                $progressCallback("Processing area: {$area}");
-            }
+if [ "$MODE_CHOICE" = "1" ]; then
+    TARGET_MODE="developer"
+elif [ "$MODE_CHOICE" = "2" ]; then
+    TARGET_MODE="production"
+else
+    echo "Invalid choice. Please run the script again and choose 1 or 2."
+    exit 1
+fi
 
-            foreach ($themes as $theme) {
-                if ($theme->getArea() !== $area) {
-                    continue;
-                }
+echo "==> Selected mode: $TARGET_MODE"
 
-                if ($progressCallback) {
-                    $progressCallback("  Processing theme: {$theme->getName()} ({$theme->getThemePath()})");
-                }
+########################################
+# 1. Set Magento Mode
+########################################
+if [ "$TARGET_MODE" = "developer" ]; then
+    echo "==> Setting Magento to developer mode..."
+    $PHP_BIN bin/magento deploy:mode:set developer -s
+else
+    echo "==> Enabling maintenance mode..."
+    $PHP_BIN bin/magento maintenance:enable || true
 
-                $created += $this->createTranslationFilesForTheme($area, $theme, $progressCallback);
-            }
-        }
+    echo "==> Setting Magento to production mode..."
+    $PHP_BIN bin/magento deploy:mode:set production -s
+fi
 
-        return $created;
-    }
+########################################
+# 2. Setup Upgrade
+########################################
+echo "==> Running setup:upgrade..."
+$PHP_BIN bin/magento setup:upgrade
 
-    /**
-     * Create translation files for a specific theme
-     *
-     * @param string $area
-     * @param ThemeInterface $theme
-     * @param callable|null $progressCallback
-     * @return int Number of files created
-     */
-    public function createTranslationFilesForTheme(
-        string $area,
-        ThemeInterface $theme,
-        ?callable $progressCallback = null
-    ): int {
-        $created = 0;
+########################################
+# 3. Compile & Static Content
+########################################
+if [ "$TARGET_MODE" = "production" ]; then
+    echo "==> Running DI compile (production)..."
+    $PHP_BIN bin/magento setup:di:compile
+fi
 
-        foreach (self::LOCALES as $locale) {
-            $this->emulation->startEnvironmentEmulation(0, $area, true);
+echo "==> Deploying static content..."
+$PHP_BIN bin/magento setup:static-content:deploy -f $LOCALES --jobs=$JOBS
 
-            try {
-                $this->design->setDesignTheme($theme);
-                $themePath = $theme->getThemePath();
+########################################
+# 4. Permissions
+########################################
+echo "==> Setting ownership to $WEB_USER:$WEB_GROUP ..."
+sudo chown -R $WEB_USER:$WEB_GROUP .
 
-                if ($this->createJsTranslationFile($area, $themePath, $locale)) {
-                    if ($progressCallback) {
-                        $progressCallback("    Created: js-translation.json");
-                    }
-                    $created++;
-                }
+echo "==> Applying write permissions to required directories and files..."
+find var generated vendor pub/static pub/media app/etc -type f -exec chmod u+w {} +
+find var generated vendor pub/static pub/media app/etc -type d -exec chmod u+w {} +
 
-                if ($this->createMageDictionaryFile($area, $themePath, $locale)) {
-                    if ($progressCallback) {
-                        $progressCallback("    Created: js-translation.json");
-                    }
-                    $created++;
-                }
+echo "==> Ensuring bin/magento is executable..."
+chmod u+x bin/magento
 
-                if ($this->createMageTranslationDictionaryFile($area, $themePath, $locale)) {
-                    if ($progressCallback) {
-                        $progressCallback("    Created: mage-translation-dictionary.js");
-                    }
-                    $created++;
-                }
-            } catch (\Exception $e) {
-                if ($progressCallback) {
-                    $progressCallback("    Error: {$e->getMessage()}");
-                }
-            } finally {
-                $this->emulation->stopEnvironmentEmulation();
-            }
-        }
+########################################
+# 5. Cache & Maintenance
+########################################
+echo "==> Flushing cache..."
+$PHP_BIN bin/magento cache:flush
 
-        return $created;
-    }
+if [ "$TARGET_MODE" = "production" ]; then
+    echo "==> Disabling maintenance mode..."
+    $PHP_BIN bin/magento maintenance:disable
+fi
 
-    /**
-     * Check if translation files exist for current theme in specified area
-     *
-     * @param string $area
-     * @return bool
-     */
-    public function translationFilesExist(string $area): bool
-    {
-        $locale = self::LOCALES[0];
-
-        $this->emulation->startEnvironmentEmulation(null, $area);
-
-        try {
-            $theme = $this->design->getDesignTheme();
-            $themePath = $theme->getThemePath();
-
-            $jsTranslationPath = $this->getJsTranslationPath($area, $themePath, $locale);
-            $mageTranslatePath = $this->getMageTranslationPath($area, $themePath, $locale);
-            $mageDictionaryPath = $this->getDictionaryPath($area, $themePath, $locale);
-
-            return $this->file->isExists($jsTranslationPath) && $this->file->isExists($mageTranslatePath) && $this->file->isExists($mageDictionaryPath);
-        } finally {
-            $this->emulation->stopEnvironmentEmulation();
-        }
-    }
-
-    /**
-     * Create translation files for the current theme in specified area
-     *
-     * @param string $area
-     * @return int Number of files created
-     */
-    public function createTranslationFilesForCurrentTheme(string $area): int
-    {
-        $created = 0;
-
-        $this->emulation->startEnvironmentEmulation(null, $area);
-
-        try {
-            $theme = $this->design->getDesignTheme();
-            $themePath = $theme->getThemePath();
-            $locale = self::LOCALES[0];
-
-            if ($this->createJsTranslationFile($area, $themePath, $locale)) {
-                $created++;
-            }
-
-            if ($this->createMageTranslationDictionaryFile($area, $themePath, $locale)) {
-                $created++;
-            }
-        } catch (\Exception $e) {
-            // Silent fail - don't break the site
-        } finally {
-            $this->emulation->stopEnvironmentEmulation();
-        }
-
-        return $created;
-    }
-
-    /**
-     * Create js-translation.json file
-     *
-     * @param string $area
-     * @param string $themePath
-     * @param string $locale
-     * @return bool True if file was created, false if already exists
-     */
-    private function createJsTranslationFile(string $area, string $themePath, string $locale): bool
-    {
-        $filePath = $this->getJsTranslationPath($area, $themePath, $locale);
-
-        if ($this->file->isExists($filePath)) {
-            return false;
-        }
-
-        $directory = dirname($filePath);
-        if (!$this->file->isExists($directory)) {
-            $this->file->createDirectory($directory, 0755);
-        }
-
-        try {
-            $translationData = $this->dataProvider->getData($themePath);
-        } catch (\Exception $e) {
-            $translationData = [];
-        }
-
-        $this->file->filePutContents(
-            $filePath,
-            json_encode($translationData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
-        );
-
-        return true;
-    }
-
-    /**
-     * Create mage-translation-dictionary.js file
-     *
-     * @param string $area
-     * @param string $themePath
-     * @param string $locale
-     * @return bool True if file was created, false if already exists
-     */
-    private function createMageTranslationDictionaryFile(string $area, string $themePath, string $locale): bool
-    {
-        $filePath = $this->getMageTranslationPath($area, $themePath, $locale);
-
-        if ($this->file->isExists($filePath)) {
-            return false;
-        }
-
-        $directory = dirname($filePath);
-        if (!$this->file->isExists($directory)) {
-            $this->file->createDirectory($directory, 0755);
-        }
-
-        $jsContent = <<<'JS'
-define([
-    'text!js-translation.json'
-], function (dict) {
-    'use strict';
-
-    return JSON.parse(dict);
-});
-JS;
-
-        $this->file->filePutContents($filePath, $jsContent);
-
-        return true;
-    }
-
-    /**
-     * Create mage-translation-dictionary.js file
-     *
-     * @param string $area
-     * @param string $themePath
-     * @param string $locale
-     * @return bool True if file was created, false if already exists
-     */
-    private function createMageDictionaryFile(string $area, string $themePath, string $locale): bool
-    {
-        $filePath = $this->getDictionaryPath($area, $themePath, $locale);
-
-        echo $filePath;
-        exit;
-
-        if ($this->file->isExists($filePath)) {
-            return false;
-        }
-
-        $directory = dirname($filePath);
-        if (!$this->file->isExists($directory)) {
-            $this->file->createDirectory($directory, 0755);
-        }
-
-        $jsContent = <<<'JS'
-define([
-    'text!js-translation.json'
-], function (dict) {
-    'use strict';
-
-    return JSON.parse(dict);
-});
-JS;
-
-        $this->file->filePutContents($filePath, $jsContent);
-
-        return true;
-    }
-
-
-    /**
-     * Get path to js-translation.json file
-     *
-     * @param string $area
-     * @param string $themePath
-     * @param string $locale
-     * @return string
-     */
-    private function getDictionaryPath(string $area, string $themePath, string $locale): string
-    {
-        return BP . "/pub/static/{$area}/{$themePath}/{$locale}/mageTranslationDictionary.js";
-    }
-
-    /**
-     * Get path to js-translation.json file
-     *
-     * @param string $area
-     * @param string $themePath
-     * @param string $locale
-     * @return string
-     */
-    private function getJsTranslationPath(string $area, string $themePath, string $locale): string
-    {
-        return BP . "/pub/static/{$area}/{$themePath}/{$locale}/js-translation.json";
-    }
-
-    /**
-     * Get path to mage-translation-dictionary.js file
-     *
-     * @param string $area
-     * @param string $themePath
-     * @param string $locale
-     * @return string
-     */
-    private function getMageTranslationPath(string $area, string $themePath, string $locale): string
-    {
-        return BP . "/pub/static/{$area}/{$themePath}/{$locale}/Magento_Translation/js/mage-translation-dictionary.js";
-    }
-}
+echo "============================================"
+echo " Deployment finished in $TARGET_MODE mode."
+echo "============================================"
