@@ -1,161 +1,81 @@
-<?php
-use Magento\Framework\App\Bootstrap;
-use Laminas\Ldap\Ldap;
-use Laminas\Ldap\Exception\LdapException;
+@echo off
+setlocal enabledelayedexpansion
 
-require __DIR__ . '/app/bootstrap.php';
+echo ===========================================
+echo MAGENTO FILE DIFFERENCE FINDER
+echo ===========================================
+echo.
 
-$bootstrap = Bootstrap::create(BP, $_SERVER);
-$objectManager = $bootstrap->getObjectManager();
+set svn=D:\Svn\dev-upgrade\app\code
+set other=D:\Chandan\Production_Exisintng_backup_04nov25\app\code
 
-echo "\n=============================================================\n";
-echo "         SBI LDAP DIAGNOSTIC TOOL (MULTIPLE SERVER TEST)\n";
-echo "=============================================================\n\n";
+set diff_report=files_with_differences_%date:/=-%.txt
 
-// ============================================================
-// SBI LDAP SERVERS LIST (from screenshot)
-// ============================================================
+echo Report: %diff_report%
+echo.
 
-$ldapServers = [
-    "ha-ldap",
-    "10.176.54.32",
-    "10.189.37.138",
-    "10.176.54.31",
-    "10.189.37.137",
-    "10.176.54.30",
-    "10.189.37.136",
-    "10.176.53.145",
-    "10.189.37.135"
-];
+echo FILES WITH DIFFERENCES > "%diff_report%"
+echo ====================== >> "%diff_report%"
+echo Generated: %date% %time% >> "%diff_report%"
+echo SVN: %svn% >> "%diff_report%"
+echo Other: %other% >> "%diff_report%"
+echo. >> "%diff_report%"
 
-// ============================================================
-// Credentials + Base DN
-// ============================================================
+set diff_count=0
+set missing_count=0
+set extra_count=0
 
-$password = "Busi#342mgt";
+echo Checking for differences...
+echo.
 
-$baseDn = "OU=Users,OU=LOTUS,OU=Others Location,DC=CORP,DC=AD,DC=SBI";
+:: Check all file types
+for %%e in (php phtml xml js css less scss json txt config) do (
+    echo Checking .%%e files...
+    
+    for /r "%svn%" %%f in (*.%%e) do (
+        set "filepath=%%f"
+        set "relpath=!filepath:%svn%=!"
+        
+        if exist "%other%!relpath!" (
+            fc "%%f" "%other%!relpath!" > nul
+            if errorlevel 1 (
+                set /a diff_count+=1
+                echo !relpath! >> "%diff_report%"
+            )
+        ) else (
+            set /a missing_count+=1
+        )
+    )
+    
+    for /r "%other%" %%f in (*.%%e) do (
+        set "filepath=%%f"
+        set "relpath=!filepath:%other%=!"
+        
+        if not exist "%svn%!relpath!" (
+            set /a extra_count+=1
+        )
+    )
+)
 
-$possibleUsernames = [
-    'CN=digi_yono_mgmt_prod,OU=Users,OU=LOTUS,OU=Others Location,DC=CORP,DC=AD,DC=SBI',
-    'CN=digi_yono_mgmt_prod,OU=Users,OU=LOTUS,OU=Others\ Location,DC=CORP,DC=AD,DC=SBI',
-    'digi_yono_mgmt_prod@CORP.AD.SBI',
-    'CORP\\digi_yono_mgmt_prod'
-];
+:: Add summary to report
+echo. >> "%diff_report%"
+echo ====================== >> "%diff_report%"
+echo SUMMARY >> "%diff_report%"
+echo ====================== >> "%diff_report%"
+echo Files with differences: %diff_count% >> "%diff_report%"
+echo Files missing in other: %missing_count% >> "%diff_report%"
+echo Extra files in other: %extra_count% >> "%diff_report%"
+echo Total files checked: .php .phtml .xml .js .css .less .scss .json .txt .config >> "%diff_report%"
 
-// ============================================================
-// Try each server
-// ============================================================
-
-$workingServer = null;
-$workingUsername = null;
-
-echo "1. Testing all LDAP servers...\n\n";
-
-foreach ($ldapServers as $server) {
-
-    echo "-----------------------------------\n";
-    echo "Testing server: $server\n";
-
-    // Test port connectivity
-    $socket = @fsockopen($server, 389, $errno, $errStr, 5);
-    if (!$socket) {
-        echo "   ✗ Cannot connect to port 389 on $server - $errStr\n";
-        continue;
-    }
-    fclose($socket);
-
-    echo "   ✓ Port 389 reachable\n";
-
-    // Now test bind with multiple username formats
-    foreach ($possibleUsernames as $u) {
-
-        echo "   Trying bind with username: $u\n";
-
-        try {
-            $ldapTest = new Ldap([
-                'host' => $server,
-                'port' => 389,
-                'useSsl' => false,
-                'useStartTls' => false,
-                'bindRequiresDn' => true,
-                'username' => $u,
-                'password' => $password,
-                'networkTimeout' => 10
-            ]);
-
-            $ldapTest->bind();
-
-            // SUCCESS!
-            echo "   ✓ BIND SUCCESSFUL on server: $server\n";
-            $workingServer = $server;
-            $workingUsername = $u;
-            break;
-
-        } catch (LdapException $e) {
-            echo "   ✗ Bind Failed: " . $e->getMessage() . "\n";
-            echo "     Error Code: " . $e->getCode() . "\n";
-        }
-    }
-
-    if ($workingServer) break;
-}
-
-if (!$workingServer) {
-    echo "\n❌ ERROR: No LDAP server allowed a successful bind.\n";
-    exit;
-}
-
-echo "\n✔ Working LDAP Server: $workingServer\n";
-echo "✔ Working Bind Username: $workingUsername\n\n";
-
-
-// ============================================================
-// 2. Validate Base DN
-// ============================================================
-
-echo "2. Validating Base DN...\n";
-
-try {
-    $ldapTest->search('(objectClass=*)', $baseDn, Ldap::SEARCH_SCOPE_BASE);
-    echo "   ✓ Base DN valid\n";
-} catch (LdapException $e) {
-    echo "   ✗ Base DN error: " . $e->getMessage();
-}
-
-echo "\n";
-
-// ============================================================
-// 3. Check User Existence
-// ============================================================
-
-echo "3. Checking if user exists...\n";
-
-$checkUsers = ['arjun', 'pranav', 'testuser'];
-
-foreach ($checkUsers as $sam) {
-
-    echo "\nSearching for user: $sam\n";
-
-    try {
-        $results = $ldapTest->search("(samaccountname=$sam)", $baseDn);
-
-        if ($results->count() == 0) {
-            echo "   ❌ User NOT found: $sam\n";
-            continue;
-        }
-
-        $entry = $results->current();
-        echo "   ✓ User FOUND:\n";
-        echo "     DN: " . $entry['dn'] . "\n";
-        echo "     CN: " . ($entry['cn'][0] ?? 'N/A') . "\n";
-        echo "     Mail: " . ($entry['mail'][0] ?? 'N/A') . "\n";
-
-    } catch (LdapException $e) {
-        echo "   ✗ LDAP Search Error: " . $e->getMessage() . "\n";
-    }
-}
-
-echo "\n=============================================================\n";
-echo "                  LDAP TEST COMPLETED\n";
-echo "=============================================================\n";
+echo.
+echo ===========================================
+echo COMPLETE
+echo ===========================================
+echo Files with differences: %diff_count%
+echo Missing in other: %missing_count%
+echo Extra in other: %extra_count%
+echo.
+echo Report: %diff_report%
+echo.
+notepad "%diff_report%"
+pause
