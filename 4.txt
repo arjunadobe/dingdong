@@ -17,7 +17,7 @@ if exist "%report%" del "%report%"
 echo Creating HTML report with diffs: %report%
 echo.
 
-:: Create HTML header
+:: Create HTML header - FIXED PARENTHESES ISSUE
 (
 echo ^<html^>
 echo ^<head^>
@@ -33,7 +33,7 @@ echo     .diff-line { margin: 2px 0; }
 echo     .diff-old { color: red; background: #ffe6e6; }
 echo     .diff-new { color: green; background: #e6ffe6; }
 echo     .summary { background: #f0f8ff; padding: 15px; margin: 20px 0; }
-echo     table { border-collapse: collapse; width: 100^%; }
+echo     table { border-collapse: collapse; width: 100%%; }
 echo     th, td { border: 1px solid #ddd; padding: 8px; }
 echo     th { background: #f2f2f2; }
 echo   ^</style^>
@@ -53,7 +53,7 @@ set diff_count=0
 echo   ^<h2^>Files with Detailed Differences^</h2^> >> "%report%"
 
 :: Check all Magento file types including .less
-for %%t in (php phtml xml less css js scss json txt config) do (
+for %%t in (php phtml xml less css js) do (
     echo Checking .%%t files...
     
     for /r "%svn%" %%f in (*.%%t) do (
@@ -68,12 +68,11 @@ for %%t in (php phtml xml less css js scss json txt config) do (
             if errorlevel 1 (
                 set /a diff_count+=1
                 
-                :: Add to HTML report with diffs
-                (
-                echo   ^<div class="diff-section"^>
-                echo     ^<div class="file-header"^>File: !relpath! ^(.%%t^)^</div^>
-                echo     ^<div class="diff-content"^>
-                ) >> "%report%"
+                :: Add to HTML report with diffs - FIXED PARENTHESES
+                echo   ^<div class="diff-section"^> >> "%report%"
+                echo     ^<div class="file-header"^>File: !relpath! ^(.%%t^) >> "%report%"
+                echo ^</div^> >> "%report%"
+                echo     ^<div class="diff-content"^> >> "%report%"
                 
                 :: Read and format diff output
                 set in_diff_block=0
@@ -100,10 +99,9 @@ for %%t in (php phtml xml less css js scss json txt config) do (
                     )
                 )
                 
-                (
-                echo     ^</div^>
-                echo   ^</div^>
-                ) >> "%report%"
+                echo     ^</div^> >> "%report%"
+                echo   ^</div^> >> "%report%"
+                echo. >> "%report%"
             )
             
             del temp_fc.txt 2>nul
@@ -116,7 +114,7 @@ for %%t in (php phtml xml less css js scss json txt config) do (
 echo   ^<h2^>Summary^</h2^>
 echo   ^<div class="summary"^>
 echo     ^<p^>Files with differences: %diff_count%^</p^>
-echo     ^<p^>File types checked: php, phtml, xml, less, css, js, scss, json, txt, config^</p^>
+echo     ^<p^>File types checked: php, phtml, xml, less, css, js^</p^>
 echo     ^<p^>Report: %report%^</p^>
 echo   ^</div^>
 echo ^</body^>
