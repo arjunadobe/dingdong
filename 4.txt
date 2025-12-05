@@ -1,255 +1,152 @@
-<?php
-use Magento\Framework\App\Bootstrap;
+@echo off
+setlocal enabledelayedexpansion
 
-require __DIR__ . '/app/bootstrap.php';
+echo ===========================================
+echo MAGENTO FOLDER COMPARISON - HTML REPORT
+echo ===========================================
+echo.
 
-$bootstrap = Bootstrap::create(BP, $_SERVER);
-$objectManager = $bootstrap->getObjectManager();
+set svn=D:\Svn\dev-upgrade\app\code
+set other=D:\Chandan\Production_Exisintng_backup_04nov25\app\code
 
-echo "\n=============================================================\n";
-echo "         SBI LDAP DIAGNOSTIC TOOL (MULTIPLE SERVER TEST)\n";
-echo "=============================================================\n\n";
+set report=report.html
 
-// ============================================================
-// SBI LDAP SERVERS LIST (from screenshot)
-// ============================================================
+:: Remove existing report file if it exists
+if exist "%report%" (
+    echo Removing existing report: %report%
+    del "%report%"
+)
 
-$ldapServers = [
-    "ha-ldap",
-    "10.176.54.32",
-    "10.189.37.138",
-    "10.176.54.31",
-    "10.189.37.137",
-    "10.176.54.30",
-    "10.189.37.136",
-    "10.176.53.145",
-    "10.189.37.135"
-];
+echo Creating HTML report: %report%
+echo.
 
-// ============================================================
-// Credentials + Base DN
-// ============================================================
+:: Create HTML report
+(
+echo ^<html^>
+echo ^<head^>
+echo   ^<title^>Magento Folder Comparison Report^</title^>
+echo   ^<style^>
+echo     body { font-family: Arial, sans-serif; margin: 20px; }
+echo     h1 { color: #333; }
+echo     h2 { color: #555; margin-top: 30px; }
+echo     .diff { color: red; font-weight: bold; }
+echo     .missing { color: orange; }
+echo     .extra { color: blue; }
+echo     table { border-collapse: collapse; width: 100^%; margin-top: 10px; }
+echo     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+echo     th { background-color: #f2f2f2; }
+echo     .summary { background-color: #f9f9f9; padding: 15px; margin: 20px 0; }
+echo   ^</style^>
+echo ^</head^>
+echo ^<body^>
+echo   ^<h1^>Magento Folder Comparison Report^</h1^>
+echo   ^<div class="summary"^>
+echo     ^<p^>^<strong^>Generated:^</strong^^ %date% %time%^</p^>
+echo     ^<p^>^<strong^>SVN Folder:^</strong^^ %svn%^</p^>
+echo     ^<p^>^<strong^>Other Folder:^</strong^ %other%^</p^>
+echo   ^</div^>
+) > "%report%"
 
-$password = "Busi#342mgt";
+:: Initialize counters
+set diff_count=0
+set missing_count=0
+set extra_count=0
 
-$baseDn = "OU=Users,OU=LOTUS,OU=Others Location,DC=CORP,DC=AD,DC=SBI";
+:: Start table for different files
+(
+echo   ^<h2^>Files with Differences^</h2^>
+echo   ^<table^>
+echo     ^<tr^>^<th^>File Type^</th^>^<th^>File Path^</th^>^</tr^>
+) >> "%report%"
 
-$possibleUsernames = [
-    'CN=digi_yono_mgmt_prod,OU=Users,OU=LOTUS,OU=Others Location,DC=CORP,DC=AD,DC=SBI',
-    'CN=digi_yono_mgmt_prod,OU=Users,OU=LOTUS,OU=Others\ Location,DC=CORP,DC=AD,DC=SBI',
-    'digi_yono_mgmt_prod@CORP.AD.SBI',
-    'CORP\\digi_yono_mgmt_prod'
-];
+:: Check Magento file types
+set file_types=php phtml xml less css js
 
-// ============================================================
-// Try each server
-// ============================================================
+for %%t in (%file_types%) do (
+    echo Checking .%%t files...
+    
+    for /r "%svn%" %%f in (*.%%t) do (
+        set "filepath=%%f"
+        set "relpath=!filepath:%svn%=!"
+        
+        if exist "%other%!relpath!" (
+            fc "%%f" "%other%!relpath!" > nul
+            if errorlevel 1 (
+                set /a diff_count+=1
+                echo     ^<tr^>^<td^>.%%t^</td^>^<td^>!relpath!^</td^>^</tr^> >> "%report%"
+            )
+        ) else (
+            set /a missing_count+=1
+        )
+    )
+)
 
-$workingServer = null;
-$workingUsername = null;
-$ldapConn = null;
+:: Close table
+echo   ^</table^> >> "%report%"
 
-echo "1. Testing all LDAP servers...\n\n";
+:: Show missing files
+if %missing_count% gtr 0 (
+    (
+    echo   ^<h2^>Files Missing in Other Folder^</h2^>
+    echo   ^<table^>
+    echo     ^<tr^>^<th^>Status^</th^>^<th^>File Path^</th^>^</tr^>
+    ) >> "%report%"
+    
+    for %%t in (%file_types%) do (
+        for /r "%svn%" %%f in (*.%%t) do (
+            set "filepath=%%f"
+            set "relpath=!filepath:%svn%=!"
+            
+            if not exist "%other%!relpath!" (
+                echo     ^<tr class="missing"^>^<td^>Missing^</td^>^<td^>!relpath!^</td^>^</tr^> >> "%report%"
+            )
+        )
+    )
+    echo   ^</table^> >> "%report%"
+)
 
-foreach ($ldapServers as $server) {
+:: Show extra files
+(
+echo   ^<h2^>Files Only in Other Folder^</h2^>
+echo   ^<table^>
+echo     ^<tr^>^<th^>Status^</th^>^<th^>File Path^</th^>^</tr^>
+) >> "%report%"
 
-    echo "-----------------------------------\n";
-    echo "Testing server: $server\n";
+for %%t in (%file_types%) do (
+    for /r "%other%" %%f in (*.%%t) do (
+        set "filepath=%%f"
+        set "relpath=!filepath:%other%=!"
+        
+        if not exist "%svn%!relpath!" (
+            set /a extra_count+=1
+            echo     ^<tr class="extra"^>^<td^>Extra^</td^>^<td^>!relpath!^</td^>^</tr^> >> "%report%"
+        )
+    )
+)
 
-    // Test port connectivity
-    $socket = @fsockopen($server, 389, $errno, $errStr, 5);
-    if (!$socket) {
-        echo "   ✗ Cannot connect to port 389 on $server - $errStr\n";
-        continue;
-    }
-    fclose($socket);
+echo   ^</table^> >> "%report%"
 
-    echo "   ✓ Port 389 reachable\n";
+:: Add summary
+(
+echo   ^<h2^>Summary^</h2^>
+echo   ^<div class="summary"^>
+echo     ^<p^>Files with differences: ^<span class="diff"^>%diff_count%^</span^>^</p^>
+echo     ^<p^>Files missing in other folder: ^<span class="missing"^>%missing_count%^</span^>^</p^>
+echo     ^<p^>Extra files in other folder: ^<span class="extra"^>%extra_count%^</span^>^</p^>
+echo     ^<p^>File types checked: php, phtml, xml, less, css, js^</p^>
+echo   ^</div^>
+echo ^</body^>
+echo ^</html^>
+) >> "%report%"
 
-    // Now test bind with multiple username formats
-    foreach ($possibleUsernames as $u) {
-
-        echo "   Trying bind with username: $u\n";
-
-        // Connect to LDAP server
-        $ldapConn = ldap_connect($server, 389);
-
-        if (!$ldapConn) {
-            echo "   ✗ LDAP connection failed\n";
-            continue;
-        }
-
-        // Set LDAP options
-        ldap_set_option($ldapConn, LDAP_OPT_PROTOCOL_VERSION, 3);
-        ldap_set_option($ldapConn, LDAP_OPT_REFERRALS, 0);
-        ldap_set_option($ldapConn, LDAP_OPT_NETWORK_TIMEOUT, 10);
-
-        try {
-            // Attempt bind
-            $bindResult = @ldap_bind($ldapConn, $u, $password);
-
-            if ($bindResult) {
-                // SUCCESS!
-                echo "   ✓ BIND SUCCESSFUL on server: $server\n";
-                $workingServer = $server;
-                $workingUsername = $u;
-                break 2; // Break out of both loops
-            } else {
-                $error = ldap_error($ldapConn);
-                $errno = ldap_errno($ldapConn);
-                echo "   ✗ Bind Failed: $error (Code: $errno)\n";
-            }
-
-        } catch (Exception $e) {
-            echo "   ✗ Bind Exception: " . $e->getMessage() . "\n";
-        }
-
-        // Close connection if bind failed
-        if (!$bindResult) {
-            ldap_close($ldapConn);
-            $ldapConn = null;
-        }
-    }
-}
-
-if (!$workingServer) {
-    echo "\n❌ ERROR: No LDAP server allowed a successful bind.\n";
-    exit;
-}
-
-echo "\n✔ Working LDAP Server: $workingServer\n";
-echo "✔ Working Bind Username: $workingUsername\n\n";
-
-// ============================================================
-// 2. Validate Base DN
-// ============================================================
-
-echo "2. Validating Base DN...\n";
-
-if ($ldapConn) {
-    $searchResult = @ldap_read($ldapConn, $baseDn, "(objectClass=*)", [], 0, 0, 10);
-
-    if ($searchResult && ldap_count_entries($ldapConn, $searchResult) > 0) {
-        echo "   ✓ Base DN valid\n";
-        ldap_free_result($searchResult);
-    } else {
-        $error = ldap_error($ldapConn);
-        echo "   ✗ Base DN error: $error\n";
-    }
-} else {
-    echo "   ✗ No active LDAP connection\n";
-}
-
-echo "\n";
-
-// ============================================================
-// 3. Check User Existence
-// ============================================================
-
-echo "3. Checking if user exists...\n";
-
-$checkUsers = ['arjun', 'pranav', 'testuser'];
-
-foreach ($checkUsers as $sam) {
-
-    echo "\nSearching for user: $sam\n";
-
-    if (!$ldapConn) {
-        echo "   ✗ No active LDAP connection\n";
-        continue;
-    }
-
-    $filter = "(samaccountname=$sam)";
-    $searchResult = @ldap_search($ldapConn, $baseDn, $filter, [], 0, 0, 10);
-
-    if (!$searchResult) {
-        $error = ldap_error($ldapConn);
-        echo "   ✗ LDAP Search Error: $error\n";
-        continue;
-    }
-
-    $entries = ldap_get_entries($ldapConn, $searchResult);
-
-    if ($entries['count'] == 0) {
-        echo "   ❌ User NOT found: $sam\n";
-    } else {
-        echo "   ✓ User FOUND:\n";
-        $entry = $entries[0];
-        echo "     DN: " . ($entry['dn'] ?? 'N/A') . "\n";
-        echo "     CN: " . ($entry['cn'][0] ?? 'N/A') . "\n";
-        echo "     Mail: " . ($entry['mail'][0] ?? 'N/A') . "\n";
-        echo "     SAM Account Name: " . ($entry['samaccountname'][0] ?? 'N/A') . "\n";
-
-        // Display all available attributes for debugging
-        echo "     Available attributes: ";
-        $attrs = [];
-        foreach ($entry as $key => $value) {
-            if (!is_numeric($key) && $key !== 'count') {
-                $attrs[] = $key;
-            }
-        }
-        echo implode(', ', $attrs) . "\n";
-    }
-
-    ldap_free_result($searchResult);
-}
-
-// ============================================================
-// 4. Test User Authentication
-// ============================================================
-
-echo "\n4. Testing user authentication...\n";
-
-$testUsers = [
-    ['username' => 'arjun', 'password' => 'test123'],
-    ['username' => 'pranav', 'password' => 'test123'],
-];
-
-foreach ($testUsers as $userTest) {
-    $username = $userTest['username'];
-    $userPassword = $userTest['password'];
-
-    echo "\nTesting authentication for: $username\n";
-
-    // First find user DN
-    $filter = "(samaccountname=$username)";
-    $searchResult = @ldap_search($ldapConn, $baseDn, $filter);
-
-    if ($searchResult) {
-        $entries = ldap_get_entries($ldapConn, $searchResult);
-
-        if ($entries['count'] > 0) {
-            $userDn = $entries[0]['dn'];
-            echo "   Found user DN: $userDn\n";
-
-            // Try to bind with user credentials
-            $userLdapConn = ldap_connect($workingServer, 389);
-            ldap_set_option($userLdapConn, LDAP_OPT_PROTOCOL_VERSION, 3);
-            ldap_set_option($userLdapConn, LDAP_OPT_REFERRALS, 0);
-
-            $userBind = @ldap_bind($userLdapConn, $userDn, $userPassword);
-
-            if ($userBind) {
-                echo "   ✅ Authentication SUCCESSFUL for: $username\n";
-            } else {
-                echo "   ❌ Authentication FAILED for: $username\n";
-                echo "   Error: " . ldap_error($userLdapConn) . "\n";
-            }
-
-            ldap_close($userLdapConn);
-        } else {
-            echo "   ❌ User not found: $username\n";
-        }
-
-        ldap_free_result($searchResult);
-    }
-}
-
-// Clean up
-if ($ldapConn) {
-    ldap_close($ldapConn);
-}
-
-echo "\n=============================================================\n";
-echo "                  LDAP TEST COMPLETED\n";
-echo "=============================================================\n";
+echo.
+echo ===========================================
+echo REPORT COMPLETE
+echo ===========================================
+echo Files with differences: %diff_count%
+echo Missing in other: %missing_count%
+echo Extra in other: %extra_count%
+echo.
+echo Opening HTML report...
+start "" "%report%"
+pause
