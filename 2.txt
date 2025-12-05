@@ -2,439 +2,77 @@
 setlocal enabledelayedexpansion
 
 echo ===========================================
-echo MAGENTO app/code FOLDER COMPARISON
-echo HTML Report Generator
+echo MAGENTO FOLDER COMPARISON WITH DIFF DETAILS
 echo ===========================================
 echo.
 
-:: Set your folder paths
-set svn_folder=D:\Svn\dev-upgrade\app\code
-set other_folder=D:\Chandan\Production_Exisintng_backup_04nov25\app\code
+set svn=D:\Svn\dev-upgrade\app\code
+set other=D:\Chandan\Production_Exisintng_backup_04nov25\app\code
 
-echo Comparing: %svn_folder%
-echo         vs %other_folder%
-echo ===========================================
+set report=detailed_diff_%date:/=-%.txt
+
+echo Creating detailed report: %report%
 echo.
 
-:: Initialize counters
-set missing_count=0
-set extra_count=0
+echo DETAILED FILE COMPARISON REPORT > "%report%"
+echo =============================== >> "%report%"
+echo Date: %date% %time% >> "%report%"
+echo SVN Folder: %svn% >> "%report%"
+echo Other Folder: %other% >> "%report%"
+echo. >> "%report%"
+
 set diff_count=0
-set same_count=0
-set total_files=0
 
-:: ===========================================
-:: FIXED DATE/TIME FORMAT - Works on all Windows
-:: ===========================================
-for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set datetime=%%I
-
-set year=%datetime:~0,4%
-set month=%datetime:~4,2%
-set day=%datetime:~6,2%
-set hour=%datetime:~8,2%
-set minute=%datetime:~10,2%
-set second=%datetime:~12,2%
-
-set html_file=Magento_Comparison_%year%-%month%-%day%_%hour%-%minute%-%second%.html
-
-echo Generating HTML report: %html_file%
+echo Checking files for differences...
 echo.
 
-:: ===========================================
-:: CREATE HTML REPORT
-:: ===========================================
-
-:: Start HTML report
-(
-echo ^<html^>
-echo ^<head^>
-echo   ^<meta charset="UTF-8"^>
-echo   ^<title^>Magento Folder Comparison Report^</title^>
-echo   ^<style^>
-echo     body { font-family: 'Segoe UI', Arial, sans-serif; margin: 20px; background-color: #f8f9fa; }
-echo     .container { max-width: 1400px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-echo     h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
-echo     h2 { color: #34495e; margin-top: 30px; padding-bottom: 5px; border-bottom: 1px solid #ecf0f1; }
-echo     .summary-box { background: linear-gradient(135deg, #667eea 0^%, #764ba2 100^%); color: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
-echo     .status-badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; }
-echo     .diff { background: #ff6b6b; color: white; }
-echo     .missing { background: #ffd93d; color: #333; }
-echo     .extra { background: #6bc5d2; color: white; }
-echo     .same { background: #51cf66; color: white; }
-echo     table { width: 100^%; border-collapse: separate; border-spacing: 0; margin-top: 15px; }
-echo     th { background: #2c3e50; color: white; padding: 12px; text-align: left; position: sticky; top: 0; }
-echo     td { padding: 10px; border-bottom: 1px solid #ecf0f1; }
-echo     tr:hover { background-color: #f8f9fa; }
-echo     .file-path { font-family: 'Consolas', monospace; font-size: 12px; }
-echo     .controls { background: #f8f9fa; padding: 15px; border-radius: 6px; margin: 20px 0; }
-echo     button { background: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin-right: 10px; }
-echo     button:hover { background: #2980b9; }
-echo     .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; color: #7f8c8d; font-size: 14px; }
-echo     .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
-echo     .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); text-align: center; }
-echo     .stat-value { font-size: 32px; font-weight: bold; margin: 10px 0; }
-echo     .filter-controls { margin: 20px 0; }
-echo     .filter-btn { background: #95a5a6; margin: 5px; }
-echo     .filter-btn.active { background: #3498db; }
-echo   ^</style^>
-echo   ^<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"^>
-echo ^</head^>
-echo ^<body^>
-echo   ^<div class="container"^>
-echo     ^<h1^>^<i class="fas fa-code-compare"^>^</i^> Magento Folder Comparison Report^</h1^>
-echo     ^<div class="timestamp"^>^<i class="fas fa-calendar"^>^</i^> Generated: %year%-%month%-%day% %hour%:%minute%:%second%^</div^>
-) > "%html_file%"
-
-:: Add folder info
-(
-echo     ^<div class="summary-box"^>
-echo       ^<h2^>^<i class="fas fa-folder-open"^>^</i^> Comparison Details^</h2^>
-echo       ^<p^>^<strong^>^<i class="fas fa-code-branch"^>^</i^> SVN Folder:^</strong^^<br^>%svn_folder%^</p^>
-echo       ^<p^>^<strong^>^<i class="fas fa-folder"^>^</i^> Other Folder:^</strong^>^<br^>%other_folder%^</p^>
-echo     ^</div^>
-) >> "%html_file%"
-
-echo Starting comparison... This may take a moment.
-echo.
-
-:: Define file extensions to check
-set "extensions=php phtml xml js css less scss json txt config dist md sql ini yaml yml"
-
-:: Create data file for JavaScript
-set json_file=comparison_data_%year%%month%%day%%hour%%minute%%second%.json
-echo { "files": [ > "%json_file%"
-set first_file=1
-
-:: Create progress indicator
-echo Processing files: 
-set /a processed=0
-
-:: STEP 1: Compare all file types
-(
-echo     ^<div class="controls"^>
-echo       ^<h2^>^<i class="fas fa-filter"^>^</i^> Filter Results^</h2^>
-echo       ^<div class="filter-controls"^>
-echo         ^<button class="filter-btn active" onclick="filterFiles('all')"^>All Files^</button^>
-echo         ^<button class="filter-btn" onclick="filterFiles('diff')"^>^<i class="fas fa-exclamation-circle"^>^</i^> Different^</button^>
-echo         ^<button class="filter-btn" onclick="filterFiles('missing')"^>^<i class="fas fa-times-circle"^>^</i^> Missing^</button^>
-echo         ^<button class="filter-btn" onclick="filterFiles('extra')"^>^<i class="fas fa-plus-circle"^>^</i^> Extra^</button^>
-echo         ^<button class="filter-btn" onclick="filterFiles('same')"^>^<i class="fas fa-check-circle"^>^</i^> Identical^</button^>
-echo       ^</div^>
-echo     ^</div^>
-echo     ^<h2^>^<i class="fas fa-file-code"^>^</i^> File Comparison Results^</h2^>
-echo     ^<table id="resultsTable"^>
-echo       ^<thead^>
-echo         ^<tr^>
-echo           ^<th width="100"^>Status^</th^>
-echo           ^<th width="80"^>Type^</th^>
-echo           ^<th^>File Path^</th^>
-echo           ^<th width="150"^>Size^</th^>
-echo           ^<th width="120"^>Last Modified^</th^>
-echo           ^<th width="150"^>Actions^</th^>
-echo         ^</tr^>
-echo       ^</thead^>
-echo       ^<tbody id="resultsBody"^>
-) >> "%html_file%"
-
-for %%e in (%extensions%) do (
-    echo   Checking .%%e files...
+:: Check PHP files
+for /r "%svn%" %%f in (*.php) do (
+    set "filepath=%%f"
+    set "relpath=!filepath:%svn%=!"
     
-    for /r "%svn_folder%" %%f in (*.%%e) do (
-        set /a processed+=1
-        set /a total_files+=1
+    if exist "%other%!relpath!" (
+        :: Run fc and capture output
+        fc "%%f" "%other%!relpath!" > temp_fc.txt
         
-        :: Progress indicator
-        set /a progress=processed*100/total_files
-        <nul set /p "=.!progress!%% "
-        
-        set "relpath=%%f"
-        set "relpath=!relpath:%svn_folder%=!"
-        set "filename=%%~nxf"
-        set "filesize=%%~zf"
-        set "filemodified=%%~tf"
-        
-        :: Format file size
-        if !filesize! gtr 1048576 (
-            set /a mbsize=filesize/1048576
-            set display_size=!mbsize! MB
-        ) else if !filesize! gtr 1024 (
-            set /a kbsize=filesize/1024
-            set display_size=!kbsize! KB
-        ) else (
-            set display_size=!filesize! bytes
+        :: Check if files are different (fc returns errorlevel 1 if different)
+        if errorlevel 1 (
+            set /a diff_count+=1
+            echo ========================================== >> "%report%"
+            echo FILE: !relpath! >> "%report%"
+            echo ========================================== >> "%report%"
+            
+            :: Show first 20 lines of differences
+            set line_num=0
+            for /f "tokens=*" %%d in (temp_fc.txt) do (
+                set /a line_num+=1
+                if !line_num! LEQ 30 (
+                    echo %%d >> "%report%"
+                )
+            )
+            echo. >> "%report%"
+            echo [Showing first 30 lines of differences] >> "%report%"
+            echo. >> "%report%"
         )
-        
-        if exist "%other_folder%!relpath!" (
-            :: Compare files
-            fc "%%f" "%other_folder%!relpath!" > nul 2>&1
-            if errorlevel 1 (
-                set /a diff_count+=1
-                set status=DIFFERENT
-                set status_class=diff
-                set status_icon=fa-exclamation-circle
-            ) else (
-                set /a same_count+=1
-                set status=IDENTICAL
-                set status_class=same
-                set status_icon=fa-check-circle
-            )
-            
-            (
-            echo         ^<tr class="file-row !status_class!" data-status="!status_class!"^>
-            echo           ^<td^>^<span class="status-badge !status_class!"^>^<i class="fas !status_icon!"^>^</i^> !status!^</span^>^</td^>
-            echo           ^<td^>.%%e^</td^>
-            echo           ^<td class="file-path"^>!relpath!^</td^>
-            echo           ^<td^>!display_size!^</td^>
-            echo           ^<td^>!filemodified!^</td^>
-            echo           ^<td^>
-            echo             ^<button onclick="viewDiff('%%e', '!relpath!')" style="background:#3498db"^>^<i class="fas fa-eye"^>^</i^> View^</button^>
-            if "!status!"=="DIFFERENT" (
-                echo             ^<button onclick="copyFile('!relpath!', 'svn')" style="background:#9b59b6"^>^<i class="fas fa-copy"^>^</i^> Copy^</button^>
-            )
-            echo           ^</td^>
-            echo         ^</tr^>
-            ) >> "%html_file%"
-            
-            :: Add to JSON
-            if !first_file!==1 (
-                echo { "type": "%%e", "path": "!relpath!", "status": "!status_class!", "size": !filesize!, "modified": "!filemodified!" } >> "%json_file%"
-                set first_file=0
-            ) else (
-                echo ,{ "type": "%%e", "path": "!relpath!", "status": "!status_class!", "size": !filesize!, "modified": "!filemodified!" } >> "%json_file%"
-            )
-            
-        ) else (
-            set /a missing_count+=1
-            set status=MISSING
-            set status_class=missing
-            set status_icon=fa-times-circle
-            
-            (
-            echo         ^<tr class="file-row !status_class!" data-status="!status_class!"^>
-            echo           ^<td^>^<span class="status-badge !status_class!"^>^<i class="fas !status_icon!"^>^</i^> !status!^</td^>
-            echo           ^<td^>.%%e^</td^>
-            echo           ^<td class="file-path"^>!relpath!^</td^>
-            echo           ^<td^>!display_size!^</td^>
-            echo           ^<td^>!filemodified!^</td^>
-            echo           ^<td^>^<span style="color:#999"^>Only in SVN^</span^>^</td^>
-            echo         ^</tr^>
-            ) >> "%html_file%"
-        )
+        del temp_fc.txt 2>nul
     )
 )
 
-:: STEP 2: Find extra files in other folder
-for %%e in (%extensions%) do (
-    for /r "%other_folder%" %%f in (*.%%e) do (
-        set "relpath=%%f"
-        set "relpath=!relpath:%other_folder%=!"
-        
-        if not exist "%svn_folder%!relpath!" (
-            set /a extra_count+=1
-            set "filesize=%%~zf"
-            set "filemodified=%%~tf"
-            
-            :: Format file size
-            if !filesize! gtr 1048576 (
-                set /a mbsize=filesize/1048576
-                set display_size=!mbsize! MB
-            ) else if !filesize! gtr 1024 (
-                set /a kbsize=filesize/1024
-                set display_size=!kbsize! KB
-            ) else (
-                set display_size=!filesize! bytes
-            )
-            
-            (
-            echo         ^<tr class="file-row extra" data-status="extra"^>
-            echo           ^<td^>^<span class="status-badge extra"^>^<i class="fas fa-plus-circle"^>^</i^> EXTRA^</span^>^</td^>
-            echo           ^<td^>.%%e^</td^>
-            echo           ^<td class="file-path"^>!relpath!^</td^>
-            echo           ^<td^>!display_size!^</td^>
-            echo           ^<td^>!filemodified!^</td^>
-            echo           ^<td^>^<span style="color:#999"^>Only in Other^</span^>^</td^>
-            echo         ^</tr^>
-            ) >> "%html_file%"
-        )
-    )
-)
-
-:: Complete JSON file
-echo ] } >> "%json_file%"
-
-:: Complete HTML table
-(
-echo       ^</tbody^>
-echo     ^</table^>
-) >> "%html_file%"
-
-:: STEP 3: Add statistics section
-(
-echo     ^<div class="stats-grid"^>
-echo       ^<div class="stat-card" style="border-left: 4px solid #51cf66;"^>
-echo         ^<div^>^<i class="fas fa-check-circle fa-2x" style="color:#51cf66"^>^</i^>^</div^>
-echo         ^<div class="stat-value"^>%same_count%^</div^>
-echo         ^<div^>Identical Files^</div^>
-echo       ^</div^>
-echo       ^<div class="stat-card" style="border-left: 4px solid #ff6b6b;"^>
-echo         ^<div^>^<i class="fas fa-exclamation-circle fa-2x" style="color:#ff6b6b"^>^</i^>^</div^>
-echo         ^<div class="stat-value"^>%diff_count%^</div^>
-echo         ^<div^>Different Files^</div^>
-echo       ^</div^>
-echo       ^<div class="stat-card" style="border-left: 4px solid #ffd93d;"^>
-echo         ^<div^>^<i class="fas fa-times-circle fa-2x" style="color:#ffd93d"^>^</i^>^</div^>
-echo         ^<div class="stat-value"^>%missing_count%^</div^>
-echo         ^<div^>Missing Files^</div^>
-echo       ^</div^>
-echo       ^<div class="stat-card" style="border-left: 4px solid #6bc5d2;"^>
-echo         ^<div^>^<i class="fas fa-plus-circle fa-2x" style="color:#6bc5d2"^>^</i^>^</div^>
-echo         ^<div class="stat-value"^>%extra_count%^</div^>
-echo         ^<div^>Extra Files^</div^>
-echo       ^</div^>
-echo     ^</div^>
-echo     ^<div class="stat-card" style="grid-column: span 2; text-align: left;"^>
-echo       ^<h3^>^<i class="fas fa-chart-bar"^>^</i^> Summary^</h3^>
-echo       ^<p^>^<strong^>Total Files Processed:^</strong^> %total_files%^</p^>
-echo       ^<p^>^<strong^>File Types Checked:^</strong^> %extensions%^</p^>
-echo       ^<p^>^<strong^>Comparison Date:^</strong^> %year%-%month%-%day% %hour%:%minute%:%second%^</p^>
-echo     ^</div^>
-) >> "%html_file%"
-
-:: STEP 4: Add JavaScript functionality
-(
-echo     ^<div class="controls"^>
-echo       ^<h2^>^<i class="fas fa-cogs"^>^</i^> Tools^</h2^>
-echo       ^<button onclick="exportToCSV()"^>^<i class="fas fa-file-csv"^>^</i^> Export to CSV^</button^>
-echo       ^<button onclick="exportToJSON()"^>^<i class="fas fa-file-code"^>^</i^> Export to JSON^</button^>
-echo       ^<button onclick="window.print()"^>^<i class="fas fa-print"^>^</i^> Print Report^</button^>
-echo       ^<button onclick="toggleAllRows()"^>^<i class="fas fa-eye"^>^</i^> Toggle All^</button^>
-echo       ^<button onclick="sortTable(2)"^>^<i class="fas fa-sort-alpha-down"^>^</i^> Sort by Name^</button^>
-echo     ^</div^>
-
-echo     ^<script^>
-echo       // Filter files by status
-echo       function filterFiles(status) {
-echo         const buttons = document.querySelectorAll('.filter-btn');
-echo         buttons.forEach(btn => btn.classList.remove('active'));
-echo         event.target.classList.add('active');
-echo         
-echo         const rows = document.querySelectorAll('.file-row');
-echo         rows.forEach(row => {
-echo           if (status === 'all' || row.dataset.status === status) {
-echo             row.style.display = '';
-echo           } else {
-echo             row.style.display = 'none';
-echo           }
-echo         });
-echo       }
-echo       
-echo       // View file differences
-echo       function viewDiff(fileType, filePath) {
-echo         const svnPath = encodeURI('%svn_folder%' + filePath);
-echo         const otherPath = encodeURI('%other_folder%' + filePath);
-echo         const diffUrl = \`diffviewer.html?file1=\${svnPath}&file2=\${otherPath}&type=\${fileType}\`;
-echo         window.open(diffUrl, '_blank', 'width=1200,height=800');
-echo       }
-echo       
-echo       // Copy file path to clipboard
-echo       function copyFilePath(path) {
-echo         navigator.clipboard.writeText(path).then(() => {
-echo           alert('File path copied to clipboard: ' + path);
-echo         });
-echo       }
-echo       
-echo       // Toggle all rows visibility
-echo       function toggleAllRows() {
-echo         const rows = document.querySelectorAll('.file-row');
-echo         const isHidden = rows[0].style.display === 'none';
-echo         rows.forEach(row => {
-echo           row.style.display = isHidden ? '' : 'none';
-echo         });
-echo       }
-echo       
-echo       // Sort table by column
-echo       function sortTable(columnIndex) {
-echo         const table = document.getElementById('resultsTable');
-echo         const tbody = table.querySelector('tbody');
-echo         const rows = Array.from(tbody.querySelectorAll('tr'));
-echo         
-echo         rows.sort((a, b) => {
-echo           const aText = a.cells[columnIndex].textContent;
-echo           const bText = b.cells[columnIndex].textContent;
-echo           return aText.localeCompare(bText);
-echo         });
-echo         
-echo         // Reorder rows
-echo         rows.forEach(row => tbody.appendChild(row));
-echo       }
-echo       
-echo       // Export to CSV
-echo       function exportToCSV() {
-echo         const rows = document.querySelectorAll('#resultsTable tr');
-echo         let csv = [];
-echo         
-echo         rows.forEach(row => {
-echo           const rowData = [];
-echo           row.querySelectorAll('th, td').forEach(cell => {
-echo             rowData.push('\"' + cell.textContent.replace(/"/g, '""') + '\"');
-echo           });
-echo           csv.push(rowData.join(','));
-echo         });
-echo         
-echo         const csvContent = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv.join('\\n'));
-echo         const link = document.createElement('a');
-echo         link.href = csvContent;
-echo         link.download = 'magento_comparison_%year%-%month%-%day%.csv';
-echo         link.click();
-echo       }
-echo       
-echo       // Export to JSON
-echo       function exportToJSON() {
-echo         const link = document.createElement('a');
-echo         link.href = '%json_file%';
-echo         link.download = 'magento_comparison_%year%-%month%-%day%.json';
-echo         link.click();
-echo       }
-echo       
-echo       // Initialize
-echo       document.addEventListener('DOMContentLoaded', function() {
-echo         console.log('Magento Comparison Report loaded successfully');
-echo         console.log('Files processed: %total_files%');
-echo       });
-echo     ^</script^>
-
-echo     ^<div class="footer"^>
-echo       ^<p^>^<i class="fas fa-info-circle"^>^</i^> Report generated by Magento Folder Comparison Tool ^| %html_file%^</p^>
-echo       ^<p^>SVN: %svn_folder% ^| Other: %other_folder%^</p^>
-echo     ^</div^>
-echo   ^</div^>
-echo ^</body^>
-echo ^</html^>
-) >> "%html_file%"
+:: Add summary
+echo. >> "%report%"
+echo ========================================== >> "%report%"
+echo SUMMARY >> "%report%"
+echo ========================================== >> "%report%"
+echo Total different files found: %diff_count% >> "%report%"
+echo Report saved to: %report% >> "%report%"
 
 echo.
 echo ===========================================
-echo COMPARISON COMPLETE
+echo REPORT COMPLETE
 echo ===========================================
+echo Different files found: %diff_count%
+echo Detailed report: %report%
 echo.
-echo HTML Report: %html_file%
-echo JSON Data: %json_file%
-echo.
-echo Summary Statistics:
-echo   Total Files Checked: %total_files%
-echo   Identical Files: %same_count%
-echo   Different Files: %diff_count%
-echo   Missing in Other: %missing_count%
-echo   Extra in Other: %extra_count%
-echo.
-echo Opening report in browser...
-echo ===========================================
-
-:: Open the HTML report
-if exist "%html_file%" (
-    start "" "%html_file%"
-) else (
-    echo ERROR: HTML report was not created!
-)
-
+echo Opening report...
+notepad "%report%"
 pause
