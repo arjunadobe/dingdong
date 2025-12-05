@@ -2,67 +2,58 @@
 setlocal enabledelayedexpansion
 
 echo ===========================================
-echo MAGENTO FOLDER COMPARISON - HTML REPORT
+echo MAGENTO FOLDER COMPARISON - HTML WITH DIFFS
 echo ===========================================
 echo.
 
 set svn=D:\Svn\dev-upgrade\app\code
 set other=D:\Chandan\Production_Exisintng_backup_04nov25\app\code
 
-set report=report.html
+set report=report_with_diffs.html
 
-:: Remove existing report file if it exists
-if exist "%report%" (
-    echo Removing existing report: %report%
-    del "%report%"
-)
+:: Remove old report
+if exist "%report%" del "%report%"
 
-echo Creating HTML report: %report%
+echo Creating HTML report with diffs: %report%
 echo.
 
-:: Create HTML report
+:: Create HTML header
 (
 echo ^<html^>
 echo ^<head^>
-echo   ^<title^>Magento Folder Comparison Report^</title^>
+echo   ^<title^>Magento File Differences with Details^</title^>
 echo   ^<style^>
 echo     body { font-family: Arial, sans-serif; margin: 20px; }
 echo     h1 { color: #333; }
 echo     h2 { color: #555; margin-top: 30px; }
-echo     .diff { color: red; font-weight: bold; }
-echo     .missing { color: orange; }
-echo     .extra { color: blue; }
-echo     table { border-collapse: collapse; width: 100^%; margin-top: 10px; }
-echo     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-echo     th { background-color: #f2f2f2; }
-echo     .summary { background-color: #f9f9f9; padding: 15px; margin: 20px 0; }
+echo     .diff-section { background: #f9f9f9; padding: 15px; margin: 20px 0; border-left: 4px solid #ff6b6b; }
+echo     .file-header { background: #e9e9e9; padding: 10px; font-weight: bold; }
+echo     .diff-content { background: white; padding: 15px; font-family: Consolas, monospace; font-size: 12px; }
+echo     .diff-line { margin: 2px 0; }
+echo     .diff-old { color: red; background: #ffe6e6; }
+echo     .diff-new { color: green; background: #e6ffe6; }
+echo     .summary { background: #f0f8ff; padding: 15px; margin: 20px 0; }
+echo     table { border-collapse: collapse; width: 100^%; }
+echo     th, td { border: 1px solid #ddd; padding: 8px; }
+echo     th { background: #f2f2f2; }
 echo   ^</style^>
 echo ^</head^>
 echo ^<body^>
-echo   ^<h1^>Magento Folder Comparison Report^</h1^>
+echo   ^<h1^>Magento File Differences with Details^</h1^>
 echo   ^<div class="summary"^>
-echo     ^<p^>^<strong^>Generated:^</strong^^ %date% %time%^</p^>
-echo     ^<p^>^<strong^>SVN Folder:^</strong^^ %svn%^</p^>
+echo     ^<p^>^<strong^>Generated:^</strong^ %date% %time%^</p^>
+echo     ^<p^>^<strong^>SVN Folder:^</strong^ %svn%^</p^>
 echo     ^<p^>^<strong^>Other Folder:^</strong^ %other%^</p^>
 echo   ^</div^>
 ) > "%report%"
 
-:: Initialize counters
 set diff_count=0
-set missing_count=0
-set extra_count=0
 
-:: Start table for different files
-(
-echo   ^<h2^>Files with Differences^</h2^>
-echo   ^<table^>
-echo     ^<tr^>^<th^>File Type^</th^>^<th^>File Path^</th^>^</tr^>
-) >> "%report%"
+:: Start files with differences section
+echo   ^<h2^>Files with Detailed Differences^</h2^> >> "%report%"
 
-:: Check Magento file types
-set file_types=php phtml xml less css js
-
-for %%t in (%file_types%) do (
+:: Check all Magento file types including .less
+for %%t in (php phtml xml less css js scss json txt config) do (
     echo Checking .%%t files...
     
     for /r "%svn%" %%f in (*.%%t) do (
@@ -70,70 +61,63 @@ for %%t in (%file_types%) do (
         set "relpath=!filepath:%svn%=!"
         
         if exist "%other%!relpath!" (
-            fc "%%f" "%other%!relpath!" > nul
+            :: Create temp file for fc output
+            fc "%%f" "%other%!relpath!" > temp_fc.txt
+            
+            :: Check if different
             if errorlevel 1 (
                 set /a diff_count+=1
-                echo     ^<tr^>^<td^>.%%t^</td^>^<td^>!relpath!^</td^>^</tr^> >> "%report%"
+                
+                :: Add to HTML report with diffs
+                (
+                echo   ^<div class="diff-section"^>
+                echo     ^<div class="file-header"^>File: !relpath! ^(.%%t^)^</div^>
+                echo     ^<div class="diff-content"^>
+                ) >> "%report%"
+                
+                :: Read and format diff output
+                set in_diff_block=0
+                for /f "tokens=*" %%d in (temp_fc.txt) do (
+                    set "line=%%d"
+                    
+                    :: Skip empty lines and headers
+                    if not "!line!"=="" (
+                        echo "!line!" | findstr /i "comparing files fc:" > nul
+                        if errorlevel 1 (
+                            :: Check if it's a diff line
+                            echo "!line!" | findstr "^\*\*\*\*\*" > nul
+                            if !errorlevel! == 0 (
+                                set in_diff_block=1
+                                echo       ^<div class="diff-line" style="background:#f0f0f0;padding:5px;font-weight:bold;"^>!line!^</div^> >> "%report%"
+                            ) else (
+                                if !in_diff_block! == 1 (
+                                    echo       ^<div class="diff-line diff-old"^>!line!^</div^> >> "%report%"
+                                ) else (
+                                    echo       ^<div class="diff-line diff-new"^>!line!^</div^> >> "%report%"
+                                )
+                            )
+                        )
+                    )
+                )
+                
+                (
+                echo     ^</div^>
+                echo   ^</div^>
+                ) >> "%report%"
             )
-        ) else (
-            set /a missing_count+=1
-        )
-    )
-)
-
-:: Close table
-echo   ^</table^> >> "%report%"
-
-:: Show missing files
-if %missing_count% gtr 0 (
-    (
-    echo   ^<h2^>Files Missing in Other Folder^</h2^>
-    echo   ^<table^>
-    echo     ^<tr^>^<th^>Status^</th^>^<th^>File Path^</th^>^</tr^>
-    ) >> "%report%"
-    
-    for %%t in (%file_types%) do (
-        for /r "%svn%" %%f in (*.%%t) do (
-            set "filepath=%%f"
-            set "relpath=!filepath:%svn%=!"
             
-            if not exist "%other%!relpath!" (
-                echo     ^<tr class="missing"^>^<td^>Missing^</td^>^<td^>!relpath!^</td^>^</tr^> >> "%report%"
-            )
-        )
-    )
-    echo   ^</table^> >> "%report%"
-)
-
-:: Show extra files
-(
-echo   ^<h2^>Files Only in Other Folder^</h2^>
-echo   ^<table^>
-echo     ^<tr^>^<th^>Status^</th^>^<th^>File Path^</th^>^</tr^>
-) >> "%report%"
-
-for %%t in (%file_types%) do (
-    for /r "%other%" %%f in (*.%%t) do (
-        set "filepath=%%f"
-        set "relpath=!filepath:%other%=!"
-        
-        if not exist "%svn%!relpath!" (
-            set /a extra_count+=1
-            echo     ^<tr class="extra"^>^<td^>Extra^</td^>^<td^>!relpath!^</td^>^</tr^> >> "%report%"
+            del temp_fc.txt 2>nul
         )
     )
 )
-
-echo   ^</table^> >> "%report%"
 
 :: Add summary
 (
 echo   ^<h2^>Summary^</h2^>
 echo   ^<div class="summary"^>
-echo     ^<p^>Files with differences: ^<span class="diff"^>%diff_count%^</span^>^</p^>
-echo     ^<p^>Files missing in other folder: ^<span class="missing"^>%missing_count%^</span^>^</p^>
-echo     ^<p^>Extra files in other folder: ^<span class="extra"^>%extra_count%^</span^>^</p^>
-echo     ^<p^>File types checked: php, phtml, xml, less, css, js^</p^>
+echo     ^<p^>Files with differences: %diff_count%^</p^>
+echo     ^<p^>File types checked: php, phtml, xml, less, css, js, scss, json, txt, config^</p^>
+echo     ^<p^>Report: %report%^</p^>
 echo   ^</div^>
 echo ^</body^>
 echo ^</html^>
@@ -144,8 +128,7 @@ echo ===========================================
 echo REPORT COMPLETE
 echo ===========================================
 echo Files with differences: %diff_count%
-echo Missing in other: %missing_count%
-echo Extra in other: %extra_count%
+echo Report with diffs: %report%
 echo.
 echo Opening HTML report...
 start "" "%report%"
