@@ -1,133 +1,128 @@
-#!/usr/bin/env bash
+@echo off
+setlocal enabledelayedexpansion
 
-set -e
+echo ===========================================
+echo MAGENTO app/code FOLDER COMPARISON
+echo ===========================================
+echo.
 
-########################################
-# CONFIG
-########################################
-MAGENTO_DIR="/data/www/html/magentolotus"
-SOURCE_CODE="/home/lotusadm/app/code"
-SOURCE_DESIGN="/home/lotusadm/app/design"
+:: Set your folder paths
+set svn_folder=.\magento-svn\app\code
+set other_folder=.\magento-other\app\code
 
-TARGET_CODE="$MAGENTO_DIR/app/code"
-TARGET_DESIGN="$MAGENTO_DIR/app/design"
+:: OR use full paths
+:: set svn_folder=C:\projects\magento-svn\app\code
+:: set other_folder=D:\backup\magento-other\app\code
 
-PHP_BIN="php"
-LOCALES="en_US"
-JOBS=4
-WEB_USER="www-data"
-WEB_GROUP="www-data"
+echo Comparing: %svn_folder%
+echo         vs %other_folder%
+echo ===========================================
+echo.
 
-########################################
-# ASK MODE
-########################################
-echo "============================================"
-echo "   Magento Deployment Script"
-echo "============================================"
-echo "Choose Magento mode:"
-echo "  1) Developer"
-echo "  2) Production"
-echo -n "Enter choice [1-2]: "
-read MODE_CHOICE
+:: Initialize counters
+set missing_count=0
+set extra_count=0
+set diff_count=0
+set same_count=0
 
-if [ "$MODE_CHOICE" = "1" ]; then
-    TARGET_MODE="developer"
-elif [ "$MODE_CHOICE" = "2" ]; then
-    TARGET_MODE="production"
-else
-    echo "Invalid choice. Select 1 or 2."
-    exit 1
-fi
+echo STEP 1: Check folder structure
+echo -------------------------------------------
+dir "%svn_folder%" /ad /b > svn_vendors.txt
+dir "%other_folder%" /ad /b > other_vendors.txt
 
-echo "==> Selected mode: $TARGET_MODE"
+echo Vendor namespace differences:
+fc svn_vendors.txt other_vendors.txt
+echo.
 
-########################################
-# ASK COPY/REPLACE APP/CODE & APP/DESIGN
-########################################
-echo -n "Do you want to REMOVE and COPY app/code & app/design from /home/lotusadm? [y/N]: "
-read REFRESH_CHOICE
+:: Compare each vendor namespace
+for /f "delims=" %%v in (svn_vendors.txt) do (
+    echo.
+    echo Checking vendor: %%v
+    echo -------------------------
+    
+    :: Check modules in this vendor
+    dir "%svn_folder%\%%v" /ad /b > svn_modules_%%v.txt 2>nul
+    dir "%other_folder%\%%v" /ad /b > other_modules_%%v.txt 2>nul
+    
+    fc svn_modules_%%v.txt other_modules_%%v.txt >nul
+    if errorlevel 1 (
+        echo Module structure differences in %%v:
+        fc svn_modules_%%v.txt other_modules_%%v.txt
+    ) else (
+        echo Module structure: OK
+    )
+    
+    :: Clean up temp files
+    del svn_modules_%%v.txt other_modules_%%v.txt 2>nul
+)
+echo.
 
-REFRESH_CHOICE_LOWER=$(echo "$REFRESH_CHOICE" | tr 'A-Z' 'a-z')
+echo STEP 2: Compare all PHP files
+echo -------------------------------------------
+for /r "%svn_folder%" %%f in (*.php) do (
+    set "relpath=%%f"
+    set "relpath=!relpath:%svn_folder%=!"
+    
+    if exist "%other_folder%!relpath!" (
+        fc "%%f" "%other_folder%!relpath!" > nul
+        if errorlevel 1 (
+            set /a diff_count+=1
+            echo [DIFF] !relpath!
+        ) else (
+            set /a same_count+=1
+        )
+    ) else (
+        set /a missing_count+=1
+        echo [MISSING in other] !relpath!
+    )
+)
+echo.
 
-########################################
-# SWITCH DIRECTORY
-########################################
-cd "$MAGENTO_DIR"
+echo STEP 3: Find extra files in other folder
+echo -------------------------------------------
+for /r "%other_folder%" %%f in (*.php) do (
+    set "relpath=%%f"
+    set "relpath=!relpath:%other_folder%=!"
+    
+    if not exist "%svn_folder%!relpath!" (
+        set /a extra_count+=1
+        echo [EXTRA in other] !relpath!
+    )
+)
+echo.
 
-########################################
-# OPTIONAL CODE/DESIGN REFRESH (BOTH MODES)
-########################################
-if [ "$REFRESH_CHOICE_LOWER" = "y" ] || [ "$REFRESH_CHOICE_LOWER" = "yes" ]; then
-    echo "==> Removing existing app/code and app/design..."
-    rm -rf "$TARGET_CODE"
-    rm -rf "$TARGET_DESIGN"
+echo STEP 4: Compare XML files (config, di, layout, etc.)
+echo -------------------------------------------
+for /r "%svn_folder%" %%f in (*.xml) do (
+    set "relpath=%%f"
+    set "relpath=!relpath:%svn_folder%=!"
+    
+    :: Only check XML files in specific directories
+    echo !relpath! | findstr /i "etc\|view\|layout" > nul
+    if !errorlevel! == 0 (
+        if exist "%other_folder%!relpath!" (
+            fc "%%f" "%other_folder%!relpath!" > nul
+            if errorlevel 1 (
+                set /a diff_count+=1
+                echo [XML DIFF] !relpath!
+            )
+        ) else (
+            echo [XML MISSING] !relpath!
+        )
+    )
+)
+echo.
 
-    echo "==> Copying fresh app/code from $SOURCE_CODE ..."
-    cp -R "$SOURCE_CODE" "$TARGET_CODE"
-
-    echo "==> Copying fresh app/design from $SOURCE_DESIGN ..."
-    cp -R "$SOURCE_DESIGN" "$TARGET_DESIGN"
-else
-    echo "==> Skipping app/code and app/design refresh."
-fi
-
-########################################
-# SET MODE
-########################################
-if [ "$TARGET_MODE" = "developer" ]; then
-    echo "==> Setting Magento to developer mode..."
-    $PHP_BIN bin/magento deploy:mode:set developer -s
-else
-    echo "==> Enabling maintenance mode..."
-    $PHP_BIN bin/magento maintenance:enable || true
-
-    echo "==> Setting Magento to production mode..."
-    $PHP_BIN bin/magento deploy:mode:set production -s
-fi
-
-########################################
-# SETUP UPGRADE
-########################################
-echo "==> Running setup:upgrade..."
-$PHP_BIN bin/magento setup:upgrade
-
-########################################
-# COMPILATION (PRODUCTION ONLY)
-########################################
-if [ "$TARGET_MODE" = "production" ]; then
-    echo "==> Running DI compile..."
-    $PHP_BIN bin/magento setup:di:compile
-fi
-
-########################################
-# STATIC CONTENT DEPLOY
-########################################
-echo "==> Deploying static content..."
-$PHP_BIN bin/magento setup:static-content:deploy -f $LOCALES --jobs=$JOBS
-
-########################################
-# PERMISSIONS
-########################################
-echo "==> Setting ownership to $WEB_USER:$WEB_GROUP ..."
-sudo chown -R $WEB_USER:$WEB_GROUP .
-
-echo "==> Applying write permissions..."
-find var generated vendor pub/static pub/media app/etc -type f -exec chmod u+w {} +
-find var generated vendor pub/static pub/media app/etc -type d -exec chmod u+w {} +
-
-chmod u+x bin/magento
-
-########################################
-# CACHE + MAINTENANCE
-########################################
-echo "==> Flushing cache..."
-$PHP_BIN bin/magento cache:flush
-
-if [ "$TARGET_MODE" = "production" ]; then
-    echo "==> Disabling maintenance mode..."
-    $PHP_BIN bin/magento maintenance:disable
-fi
-
-echo "============================================"
-echo " Deployment completed in $TARGET_MODE mode."
-echo "============================================"
+echo ===========================================
+echo COMPARISON SUMMARY - app/code ONLY
+echo ===========================================
+echo Files identical: %same_count%
+echo Files with differences: %diff_count%
+echo Files missing in other folder: %missing_count%
+echo Extra files in other folder: %extra_count%
+echo.
+echo To view specific file differences:
+echo   fc "%svn_folder%\Vendor\Module\file.php" "%other_folder%\Vendor\Module\file.php"
+echo.
+echo ===========================================
+pause
